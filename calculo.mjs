@@ -1,0 +1,215 @@
+// Lógica del Tablero de Cobranza.
+// No llama a ninguna API: recibe los datos ya leídos y devuelve el tablero armado.
+// Fuentes:
+//   madre     = planilla de Mel (qué cuotas debe cada cliente, cuándo, y si están tildadas)
+//   registro  = tu Registro de pagos confirmados (qué entró y en qué fecha real)
+//   tarjetas  = pipeline "Cobranza Founders" de GoHighLevel (en qué etapa está cada cliente)
+
+export const normEmail = (e) => String(e ?? '').trim().toLowerCase();
+const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const usd = (n) => 'US$ ' + Math.round(n).toLocaleString('es-AR');
+
+// "Cuota 2 Pagada" => 2 cuotas pagadas. "Cuota 3 Pendiente" => 2 pagadas (la 3 está por cobrar).
+// "Plan completo" => todo pagado. Las demás etapas no se controlan por cantidad de cuotas.
+export function etapaEsperada(etapa) {
+  const e = String(etapa ?? '').trim();
+  const m = /^Cuota (\d+) (pagada|pendiente)$/i.exec(e);
+  if (m) {
+    const k = Number(m[1]);
+    return { tipo: 'cuotas', pagadas: m[2].toLowerCase() === 'pagada' ? k : k - 1 };
+  }
+  if (/^plan completo$/i.test(e)) return { tipo: 'completo' };
+  return null;
+}
+
+const ORDEN_TIPOS = [
+  'etapa no coincide',
+  'saldo no coincide',
+  'pago sin tildar en la planilla',
+  'tilde sin pago en tu Registro',
+  'cuota inexistente en planilla',
+  'tarjeta duplicada',
+  'sin tarjeta en el pipeline',
+  'tarjeta sin planilla',
+  'tarjeta sin email',
+  'sin email en planilla',
+  'pago sin cliente en planilla',
+  'revisar a mano',
+];
+
+export function calcular({ madre = [], registro = [], tarjetas = [], hoy }) {
+  const diferencias = [];
+  const dif = (tipo, cliente, email, detalle) =>
+    diferencias.push({ tipo, cliente: cliente || '', email: email || '', detalle });
+
+  // ---- Planilla de Mel: una "inscripción" por fila, sin las reembolsadas ----
+  const inscripciones = madre
+    .filter((r) => String(r.reembolso ?? '').trim().toUpperCase() !== 'SI')
+    .map((r) => {
+      // Una cuota existe si tiene monto o fecha cargados (la columna "Cuotas" no es confiable).
+      const cuotas = (r.cuotas || [])
+        .filter((c) => c && (num(c.monto) !== null || c.vence))
+        .map((c) => ({ n: c.n, monto: num(c.monto) ?? 0, vence: c.vence || null, pagada: !!c.pagada }))
+        .sort((a, b) => a.n - b.n);
+      const total = Math.max(cuotas.length, ...cuotas.map((c) => c.n), Number(r.declaradas) || 0);
+      return { nombre: r.nombre || '', email: normEmail(r.email), cuotas, total };
+    })
+    .filter((i) => i.cuotas.length > 0);
+
+  const porEmail = new Map();
+  for (const i of inscripciones) {
+    if (!i.email) continue;
+    if (!porEmail.has(i.email)) porEmail.set(i.email, []);
+    porEmail.get(i.email).push(i);
+  }
+
+  // ---- Pipeline: tarjetas por email ----
+  const tarjetasPorEmail = new Map();
+  for (const t of tarjetas) {
+    const e = normEmail(t.email);
+    if (!e) {
+      dif('tarjeta sin email', t.nombre, '', `La tarjeta "${t.nombre}" (${t.etapa}) no tiene email en GHL, no se puede cruzar con la planilla.`);
+      continue;
+    }
+    if (!tarjetasPorEmail.has(e)) tarjetasPorEmail.set(e, []);
+    tarjetasPorEmail.get(e).push(t);
+  }
+  for (const [e, lista] of tarjetasPorEmail) {
+    if (lista.length > 1) {
+      dif('tarjeta duplicada', lista[0].nombre, e, `Hay ${lista.length} tarjetas para este cliente: ${lista.map((t) => t.etapa).join(' y ')}.`);
+    }
+    if (!porEmail.has(e)) {
+      dif('tarjeta sin planilla', lista[0].nombre, e, `La tarjeta (${lista[0].etapa}) no tiene un cliente con ese email en la planilla de Mel.`);
+    }
+  }
+
+  // ---- Cruce planilla vs pipeline, cliente por cliente ----
+  const alertaPorEmail = new Set();
+  for (const i of inscripciones) {
+    if (!i.email && i.cuotas.some((c) => !c.pagada)) {
+      dif('sin email en planilla', i.nombre, '', 'Tiene cuotas pendientes pero no tiene email en la planilla de Mel: no se puede cruzar con GHL ni con tu Registro.');
+    }
+  }
+  for (const [email, filas] of porEmail) {
+    const activas = filas.filter((f) => f.cuotas.some((c) => !c.pagada));
+    const tarjs = tarjetasPorEmail.get(email) || [];
+    const nombre = filas[0].nombre;
+
+    if (activas.length > 1) {
+      dif('revisar a mano', nombre, email, `Tiene ${activas.length} inscripciones con cuotas pendientes en la planilla, no se controla contra el pipeline.`);
+      continue;
+    }
+    if (tarjs.length === 0) {
+      if (activas.length === 1) {
+        dif('sin tarjeta en el pipeline', nombre, email, `Tiene ${activas[0].cuotas.filter((c) => !c.pagada).length} cuota(s) pendiente(s) en la planilla y no está en el pipeline.`);
+      }
+      continue;
+    }
+    if (tarjs.length > 1) continue; // ya avisado como duplicada
+
+    const t = tarjs[0];
+    const exp = etapaEsperada(t.etapa);
+    const ref = activas[0] || (filas.length === 1 ? filas[0] : null);
+
+    if (exp && ref) {
+      const pagadas = ref.cuotas.filter((c) => c.pagada).length;
+      if (exp.tipo === 'cuotas' && pagadas !== exp.pagadas) {
+        alertaPorEmail.add(email);
+        dif('etapa no coincide', nombre, email, `Planilla de Mel: ${pagadas} cuota(s) pagada(s). Pipeline: "${t.etapa}" (corresponde a ${exp.pagadas}).`);
+      }
+      if (exp.tipo === 'completo' && activas.length > 0) {
+        alertaPorEmail.add(email);
+        dif('etapa no coincide', nombre, email, `Pipeline: "Plan completo", pero en la planilla de Mel faltan ${activas[0].cuotas.filter((c) => !c.pagada).length} cuota(s) por pagar.`);
+      }
+    }
+
+    // El valor de la tarjeta debería ser lo que le falta pagar en total.
+    if (activas.length === 1 && !['Plan completo', 'Inicio'].includes(String(t.etapa).trim())) {
+      const saldo = activas[0].cuotas.filter((c) => !c.pagada).reduce((s, c) => s + c.monto, 0);
+      const valor = num(t.valor) ?? 0;
+      if (Math.abs(valor - saldo) > 0.5) {
+        alertaPorEmail.add(email);
+        dif('saldo no coincide', nombre, email, `La planilla de Mel dice que faltan ${usd(saldo)}. El valor de la tarjeta es ${usd(valor)}.`);
+      }
+    }
+  }
+
+  // ---- Tu Registro de pagos ----
+  const pagos = registro
+    .map((p) => {
+      const m = /^(\d+)\s*\/\s*(\d+)$/.exec(String(p.cuota ?? '').trim());
+      return {
+        cliente: p.cliente || '',
+        email: normEmail(p.email),
+        cuota: String(p.cuota ?? ''),
+        n: m ? Number(m[1]) : null,
+        total: m ? Number(m[2]) : null,
+        monto: num(p.monto) ?? 0,
+        fecha: p.fecha || null,
+        medio: p.medio || '',
+      };
+    })
+    .filter((p) => p.cliente || p.monto);
+
+  for (const p of pagos) {
+    if (!p.email || p.n == null) continue;
+    const filas = porEmail.get(p.email);
+    if (!filas) {
+      dif('pago sin cliente en planilla', p.cliente, p.email, `Tu Registro tiene la cuota ${p.cuota}, pero ese email no está en la planilla de Mel.`);
+      continue;
+    }
+    const candidatas = filas.map((f) => f.cuotas.find((c) => c.n === p.n)).filter(Boolean);
+    if (!candidatas.length) {
+      dif('cuota inexistente en planilla', p.cliente, p.email, `Tu Registro tiene la cuota ${p.cuota}, pero la planilla de Mel no tiene una cuota ${p.n} para este cliente.`);
+    } else if (!candidatas.some((c) => c.pagada)) {
+      dif('pago sin tildar en la planilla', p.cliente, p.email, `En tu Registro figura pagada la cuota ${p.cuota} (${p.fecha || 's/f'}), pero en la planilla de Mel no está tildada.`);
+    }
+  }
+
+  // Tildes de la planilla sin pago en tu Registro (solo cuotas 2 en adelante, y desde que empieza tu Registro).
+  const registroDesde = pagos.map((p) => p.fecha).filter(Boolean).sort()[0] || null;
+  if (registroDesde) {
+    const reg = new Set(pagos.filter((p) => p.email && p.n != null).map((p) => `${p.email}|${p.n}`));
+    for (const [email, filas] of porEmail) {
+      for (const f of filas) {
+        for (const c of f.cuotas) {
+          if (c.pagada && c.n >= 2 && c.vence && c.vence >= registroDesde && !reg.has(`${email}|${c.n}`)) {
+            dif('tilde sin pago en tu Registro', f.nombre, email, `La planilla de Mel tiene tildada la cuota ${c.n} (vence ${c.vence}), pero no está en tu Registro de pagos.`);
+          }
+        }
+      }
+    }
+  }
+
+  // ---- Salida ----
+  const etapaDe = (email) => {
+    const l = tarjetasPorEmail.get(email);
+    return l && l.length === 1 ? l[0].etapa : null;
+  };
+  const cuotas = [];
+  for (const i of inscripciones) {
+    for (const c of i.cuotas) {
+      cuotas.push({
+        cliente: i.nombre,
+        email: i.email,
+        n: c.n,
+        total: i.total,
+        monto: c.monto,
+        vence: c.vence,
+        pagada: c.pagada,
+        etapa: i.email ? etapaDe(i.email) : null,
+        alerta: i.email ? alertaPorEmail.has(i.email) : false,
+      });
+    }
+  }
+  cuotas.sort((a, b) => (a.vence || '9999').localeCompare(b.vence || '9999') || a.cliente.localeCompare(b.cliente));
+  diferencias.sort(
+    (a, b) =>
+      ORDEN_TIPOS.indexOf(a.tipo) - ORDEN_TIPOS.indexOf(b.tipo) || a.cliente.localeCompare(b.cliente),
+  );
+
+  const porEtapa = {};
+  for (const t of tarjetas) porEtapa[t.etapa] = (porEtapa[t.etapa] || 0) + 1;
+
+  return { hoy, cuotas, pagos, diferencias, pipeline: { total: tarjetas.length, porEtapa } };
+}
