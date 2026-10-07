@@ -6,7 +6,12 @@
 //   tarjetas  = pipeline "Cobranza Founders" de GoHighLevel (en qué etapa está cada cliente)
 
 export const normEmail = (e) => String(e ?? '').trim().toLowerCase();
+export const normNombre = (n) =>
+  String(n ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+// El control entre Registro, planilla de Mel y pipeline rige desde que Male tomó el puesto (septiembre).
+// Antes de esa fecha la única fuente es la planilla de Mel y no se generan avisos de diferencias.
+export const INICIO_CONTROL = '2026-09-01';
 const usd = (n) => 'US$ ' + Math.round(n).toLocaleString('es-AR');
 
 // "Cuota 2 Pagada" => 2 cuotas pagadas. "Cuota 3 Pendiente" => 2 pagadas (la 3 está por cobrar).
@@ -86,7 +91,7 @@ export function calcular({ madre = [], registro = [], tarjetas = [], hoy }) {
   // ---- Cruce planilla vs pipeline, cliente por cliente ----
   const alertaPorEmail = new Set();
   for (const i of inscripciones) {
-    if (!i.email && i.cuotas.some((c) => !c.pagada)) {
+    if (!i.email && i.cuotas.some((c) => !c.pagada && (!c.vence || c.vence >= INICIO_CONTROL))) {
       dif('sin email en planilla', i.nombre, '', 'Tiene cuotas pendientes pero no tiene email en la planilla de Mel: no se puede cruzar con GHL ni con tu Registro.');
     }
   }
@@ -100,8 +105,9 @@ export function calcular({ madre = [], registro = [], tarjetas = [], hoy }) {
       continue;
     }
     if (tarjs.length === 0) {
-      if (activas.length === 1) {
-        dif('sin tarjeta en el pipeline', nombre, email, `Tiene ${activas[0].cuotas.filter((c) => !c.pagada).length} cuota(s) pendiente(s) en la planilla y no está en el pipeline.`);
+      const recientes = activas.length === 1 ? activas[0].cuotas.filter((c) => !c.pagada && (!c.vence || c.vence >= INICIO_CONTROL)) : [];
+      if (recientes.length) {
+        dif('sin tarjeta en el pipeline', nombre, email, `Tiene ${recientes.length} cuota(s) pendiente(s) desde septiembre en la planilla y no está en el pipeline.`);
       }
       continue;
     }
@@ -186,18 +192,38 @@ export function calcular({ madre = [], registro = [], tarjetas = [], hoy }) {
     const l = tarjetasPorEmail.get(email);
     return l && l.length === 1 ? l[0].etapa : null;
   };
+  // "cobrada" sale de TU Registro (lo que vos registrás). La cuota 1 se paga al entrar y no va
+  // al Registro, así que para ella vale el check de Mel. Antes de que empiece tu Registro,
+  // el check de Mel sirve de respaldo.
+  const regPorEmail = new Set(pagos.filter((p) => p.email && p.n != null).map((p) => `${p.email}|${p.n}`));
+  const regPorNombre = new Set(pagos.filter((p) => p.cliente && p.n != null).map((p) => `${normNombre(p.cliente)}|${p.n}`));
+  const telPorEmail = new Map();
+  for (const t of tarjetas) { const e = normEmail(t.email); if (e && t.telefono && !telPorEmail.has(e)) telPorEmail.set(e, String(t.telefono)); }
   const cuotas = [];
   for (const i of inscripciones) {
     for (const c of i.cuotas) {
+      const etapa = i.email ? etapaDe(i.email) : null;
+      const enRegistro = i.email ? regPorEmail.has(`${i.email}|${c.n}`) : regPorNombre.has(`${normNombre(i.nombre)}|${c.n}`);
+      const respaldoMel = c.pagada && (!c.vence || !registroDesde || c.vence < registroDesde);
+      const cobrada = c.n === 1 ? c.pagada : enRegistro || respaldoMel;
+      // El Registro y el check de Mel dicen cosas distintas (solo se mira desde que empieza el Registro).
+      const desfasada = c.n >= 2 && !!c.vence && !!registroDesde && c.vence >= registroDesde && cobrada !== c.pagada;
+      // Entra en los números y el calendario: cuotas 2 en adelante, y la cuota 1 solo si está sin pagar.
+      // Lo que está en Incobrable no se cuenta (se sigue aparte).
+      const seguimiento = (c.n >= 2 || !c.pagada) && etapa !== 'Incobrable';
       cuotas.push({
         cliente: i.nombre,
         email: i.email,
+        telefono: i.email ? telPorEmail.get(i.email) || '' : '',
         n: c.n,
         total: i.total,
         monto: c.monto,
         vence: c.vence,
         pagada: c.pagada,
-        etapa: i.email ? etapaDe(i.email) : null,
+        cobrada,
+        desfasada,
+        seguimiento,
+        etapa,
         alerta: i.email ? alertaPorEmail.has(i.email) : false,
       });
     }
@@ -211,5 +237,5 @@ export function calcular({ madre = [], registro = [], tarjetas = [], hoy }) {
   const porEtapa = {};
   for (const t of tarjetas) porEtapa[t.etapa] = (porEtapa[t.etapa] || 0) + 1;
 
-  return { hoy, cuotas, pagos, diferencias, pipeline: { total: tarjetas.length, porEtapa } };
+  return { hoy, registroDesde, cuotas, pagos, diferencias, pipeline: { total: tarjetas.length, porEtapa } };
 }
