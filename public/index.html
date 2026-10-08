@@ -75,7 +75,7 @@
   .overlay{position:fixed;inset:0;background:rgba(10,12,16,.6);display:flex;align-items:center;justify-content:center;z-index:5}
   .overlay .card{width:min(360px,92vw)}
   .overlay form{display:flex;flex-direction:column;gap:10px}
-  .hidden{display:none}
+  .hidden{display:none!important}
   /* ---- Calendario ---- */
   .mesnav{display:flex;align-items:center;gap:8px;margin:18px 0 8px;flex-wrap:wrap}
   .mesnav h2{margin:0;font-size:18px;min-width:170px;text-align:center}
@@ -101,9 +101,13 @@
   .hoyhead{background:var(--hoy);color:#fff;margin:-16px -16px 12px;padding:10px 16px;border-radius:11px 11px 0 0;font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
   .hoyhead b{font-size:20px;letter-spacing:0;text-transform:none;margin-left:10px}
   .overlay.sobre2{z-index:8}
-  .tablero{display:grid;grid-template-columns:repeat(5,minmax(200px,1fr));gap:10px;overflow-x:auto;padding-bottom:6px;margin-top:12px}
-  .col{background:var(--chip);border-radius:12px;padding:10px;min-width:0}
-  .col h3{margin:0;font-size:13px;display:flex;justify-content:space-between;gap:6px}
+  .tablero{display:grid;grid-template-columns:repeat(5,minmax(200px,1fr));gap:10px;overflow-x:auto;padding-bottom:10px;margin-top:12px;align-items:start;scrollbar-width:auto;scrollbar-color:var(--mut) var(--chip)}
+  .tablero::-webkit-scrollbar{height:14px}
+  .tablero::-webkit-scrollbar-track{background:var(--chip);border-radius:8px}
+  .tablero::-webkit-scrollbar-thumb{background:var(--mut);border-radius:8px;border:3px solid var(--chip)}
+  /* Cada columna mide como mucho el 78% del alto de la pantalla (tope 820px) y se scrollea por dentro, con el título fijo arriba. */
+  .col{background:var(--chip);border-radius:12px;padding:0 10px 10px;min-width:0;max-height:min(78vh,820px);overflow-y:auto}
+  .col h3{margin:0;font-size:13px;display:flex;justify-content:space-between;gap:6px;position:sticky;top:0;z-index:2;background:var(--chip);padding:10px 0 6px}
   .col h3 span{color:var(--mut);font-weight:400}
   .tarj{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:10px;margin-top:8px;cursor:pointer}
   .tarj:hover{border-color:var(--acc)}
@@ -268,7 +272,7 @@
   var INICIO_SEMANA = 6; // 0=domingo ... 6=sábado (tus informes van de sábado a viernes)
 
   var DEMO = location.protocol === 'file:' || /[?&]demo\b/.test(location.search);
-  var state = { datos: null, tab: 'calendario', vista: 'semana', mes: null, dia: null, q: '', cuota: 'todas', colores: {} };
+  var state = { datos: null, tab: 'calendario', vista: 'semana', mes: null, dia: null, q: '', cuota: 'todas', colores: {}, mesDeu: null, calDeu: true };
   // Los colores los pone una persona con un clic. Hoy se pueden cambiar solo en la demo (se guardan en el navegador).
   var EDITABLE = DEMO;
   var OPCIONES = {
@@ -286,6 +290,7 @@
   function etiquetaColor(it){ if(colorMostrado(it) === 'amarillo') return 'Pagó, faltan pasos por cerrar'; if(it.tipo === 'cuota' && it.c.cobrada) return 'Pagó'; var c = colorDe(it); var o = OPCIONES[it.tipo].filter(function(x){ return x[0] === c; })[0]; return o ? o[1] : c; }
   var MEDIOS = ['Transferencia en usd','Transferencia en ar','PayPal','STRIPE','Dolar App','Dolar App (pesos)','Efectivo (presencial)','Cheque']; // en el sitio real salen de las listas de tu Registro
   var CONFIRMA = ['Male','Mel','Vicky','Tommy','Mel / Vicky','-'];
+  var ultimaCarga = 0, ultimoIntento = 0;
   state.registrados = []; state.form = null; state.pasos = {}; state.recien = null; state.informe = null; state.recibo = null; state.recibos = {}; state.ultimoRegistro = null; state.casos = {}; state.historial = []; state.vistaDeudores = 'lista'; state.ficha = null; state.fichaRender = null; state.fichaErr = '';
   var ETAPAS_CASO = ['Pendiente de analizar', 'En seguimiento', 'En negociación', 'Escalado', 'Cerrado'];
   var ESTADOS_CASO = ['Moroso', 'Pausado por impago', 'Incobrable', 'Caso especial', 'En negociación', 'Desaparecido', 'Pagado', 'Dado de baja'];
@@ -605,7 +610,7 @@
     var q = state.q.trim().toLowerCase();
     return function(x){
       var ok = !q || (x.cliente||'').toLowerCase().indexOf(q) >= 0 || (x.email||'').toLowerCase().indexOf(q) >= 0;
-      return ok && (state.cuota === 'todas' || String(x.n) === state.cuota);
+      return ok && (state.cuota === 'todas' || String(x.n) === state.cuota) && !enDeudores(x);
     };
   }
   function numeros(d, rango, pasa){
@@ -866,6 +871,22 @@ function svgRecibo(r, logo, ejemplo) {
   function normNombre(n){ return String(n || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
   function claveCaso(cliente, email){ return (email && String(email).trim()) ? String(email).trim().toLowerCase() : 'nombre:' + normNombre(cliente); }
   function casoDe(k){ return state.casos[k] || {}; }
+  // Un cliente que ya está en Deudores (en Pausado por impago o Incobrable en GHL, o con un caso en la pestaña) se maneja solo ahí:
+  // sus cuotas sin cobrar no se muestran en el Calendario ni en el Desglose. Lo que ya cobró sí se sigue viendo.
+  function enDeudores(c){
+    var cobrada = c.cobrada === undefined ? c.pagada : c.cobrada;
+    if(cobrada) return false;
+    if(c.etapa === 'Pausado por impago' || c.etapa === 'Incobrable') return true;
+    return !!state.casos[claveCaso(c.cliente, c.email)];
+  }
+  function notaDeudores(d){
+    var n = 0, quienes = {};
+    d.cuotas.forEach(function(c){ if(c.seguimiento && enDeudores(c)){ n++; quienes[claveCaso(c.cliente, c.email)] = true; } });
+    if(!n) return '';
+    var k = Object.keys(quienes).length;
+    return '<div class="nota" style="margin:8px 0 0">' + n + ' cuota' + (n === 1 ? '' : 's') + ' sin cobrar de ' + k + ' cliente' + (k === 1 ? '' : 's') + ' que ya ' + (k === 1 ? 'está' : 'están') + ' en Deudores no se ' + (n === 1 ? 'muestra' : 'muestran') + ' acá. ' +
+      '<button data-tab="deudores" style="background:none;border:0;padding:0;font:inherit;color:var(--c-azul);text-decoration:underline;cursor:pointer">Verlas en Deudores</button></div>';
+  }
   function etapaDeCaso(k){ return casoDe(k).etapa || ETAPAS_CASO[0]; }
   function esUrgente(k, hoy){ var c = casoDe(k); return !!c.fecha_proxima && String(c.fecha_proxima) < hoy && etapaDeCaso(k) !== 'Cerrado'; }
   // Todo lo automático de un cliente: sale de la planilla de Mel, tu Registro y GHL.
@@ -1093,6 +1114,68 @@ function svgRecibo(r, logo, ejemplo) {
     return tabla([{t:'Cliente'},{t:'Cuotas sin fecha'},{t:'Monto',m:1},{t:'Etapa en GHL'}],
       l.map(function(x){ return [esc(x.cliente) + (x.email ? '<div class="em">' + esc(x.email) + '</div>' : '<div class="em">sin email</div>'), esc(x.cuotas), usd.format(x.monto), x.etapa ? esc(x.etapa) : '<span class="em">sin tarjeta</span>']; }));
   }
+  // ---- Calendario de deudores: solo fechas y quiénes debían pagar, más las próximas acciones de cada caso ----
+  function esCuotaDeDeudor(c){
+    var cobrada = c.cobrada === undefined ? c.pagada : c.cobrada;
+    return !cobrada && !!c.vence && (c.n >= 2 || !c.pagada) && enDeudores(c);
+  }
+  function itemsDeudores(d, q){
+    var items = {}, coincide = function(nombre, email){ return !q || ((nombre || '') + ' ' + (email || '')).toLowerCase().indexOf(q) >= 0; };
+    var add = function(f, it){ (items[f] = items[f] || []).push(it); };
+    d.cuotas.forEach(function(c){ if(esCuotaDeDeudor(c) && coincide(c.cliente, c.email)) add(c.vence, { tipo:'cuota', c:c, k:claveCaso(c.cliente, c.email) }); });
+    Object.keys(state.casos).forEach(function(k){
+      var cs = state.casos[k];
+      if(cs && cs.fecha_proxima && etapaDeCaso(k) !== 'Cerrado' && coincide(cs.cliente, cs.email)) add(String(cs.fecha_proxima), { tipo:'accion', cs:cs, k:k });
+    });
+    Object.keys(items).forEach(function(f){
+      items[f].sort(function(a, b){
+        var na = a.tipo === 'cuota' ? a.c.cliente : a.cs.cliente, nb = b.tipo === 'cuota' ? b.c.cliente : b.cs.cliente;
+        return (a.tipo === b.tipo ? 0 : (a.tipo === 'cuota' ? -1 : 1)) || String(na || '').localeCompare(String(nb || ''));
+      });
+    });
+    return items;
+  }
+  function chipDeudor(it, hoy){
+    if(it.tipo === 'cuota'){
+      var c = it.c, txt = c.cliente + ' · ' + c.n + '/' + c.total + ' · ' + usd.format(c.monto);
+      return '<span class="it gris" data-ficha="' + esc(it.k) + '" style="cursor:pointer" title="' + esc('Debía pagar el ' + corta(c.vence) + ': ' + txt + '. Tocá para abrir su ficha.') + '">' + esc(txt) + '</span>';
+    }
+    var cs = it.cs, vencida = String(cs.fecha_proxima) < hoy, t2 = (cs.cliente || '') + ' · ' + (cs.proxima_accion || 'Próxima acción');
+    return '<span class="it ' + (vencida ? 'rojo' : 'azul') + '" data-ficha="' + esc(it.k) + '" style="cursor:pointer" title="' + esc((vencida ? 'Próxima acción vencida: ' : 'Próxima acción: ') + t2 + '. Tocá para abrir su ficha.') + '">' + (vencida ? '⚠ ' : '📌 ') + esc(t2) + '</span>';
+  }
+  function calendarioDeudores(d){
+    var ym = state.mesDeu || d.hoy.slice(0, 7), q = (state.q || '').trim().toLowerCase();
+    var items = itemsDeudores(d, q), cuotasMes = [], acciones = 0, clientes = {};
+    Object.keys(items).filter(function(f){ return f.slice(0, 7) === ym; }).forEach(function(f){
+      items[f].forEach(function(it){ if(it.tipo === 'cuota'){ cuotasMes.push(it.c); clientes[it.k] = true; } else acciones++; });
+    });
+    var h = '<section class="card" id="calDeudores" style="margin-top:12px"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap"><h2 style="margin:0">Calendario de deudores</h2>' +
+      '<button data-toggle-cal-deu="1">' + (state.calDeu === false ? 'Mostrar' : 'Ocultar') + '</button></div>';
+    if(state.calDeu === false) return h + '</section>';
+    h += '<div class="em" style="margin-top:4px">Solo los clientes que ya figuran en Deudores: cuándo debía pagar cada cuota y las próximas acciones de sus casos. Tocá uno para abrir su ficha.</div>';
+    h += '<div class="mesnav"><button data-mes-deu="-1" aria-label="Mes anterior">‹</button><h2>' + esc(nombreMes(ym)) + '</h2><button data-mes-deu="1" aria-label="Mes siguiente">›</button><button data-mes-deu="hoy">Hoy</button></div>';
+    h += '<div class="em" id="resumenCalDeu" style="margin-bottom:6px"><b>' + esc(nombreMes(ym)) + ':</b> ' + cuotasMes.length + ' cuota(s) que debían pagar (' + usd.format(suma(cuotasMes, 'monto')) + ') de ' + Object.keys(clientes).length + ' cliente(s) · ' + acciones + ' próxima(s) acción(es)</div>';
+    h += '<div class="leyenda"><span><i style="background:var(--c-gris)"></i>Debía pagar</span><span><i style="background:var(--c-azul)"></i>Próxima acción</span><span><i style="background:var(--c-rojo)"></i>Próxima acción vencida</span></div>';
+    var dias = diasDelGrid(ym);
+    h += '<div class="cal">';
+    for(var i = 0; i < 7; i++) h += '<div class="cab">' + DIAS[(INICIO_SEMANA + i) % 7] + '</div>';
+    dias.forEach(function(f){
+      var l = items[f] || [];
+      h += '<div class="dia' + (f.slice(0, 7) !== ym ? ' fuera' : '') + (f === d.hoy ? ' hoy' : '') + '" data-dia-deu="' + f + '" style="cursor:default"><span class="num">' + parse(f).getUTCDate() + '</span>';
+      l.slice(0, 4).forEach(function(it){ h += chipDeudor(it, d.hoy); });
+      if(l.length > 4) h += '<span class="mas">+' + (l.length - 4) + ' más</span>';
+      h += '</div>';
+    });
+    h += '</div><div class="agenda">';
+    var hay = false;
+    dias.filter(function(f){ return f.slice(0, 7) === ym && items[f]; }).forEach(function(f){
+      hay = true;
+      h += '<div class="ag"><div class="agf">' + esc(corta(f)) + (f === d.hoy ? ' · hoy' : '') + '</div>' + items[f].map(function(it){ return chipDeudor(it, d.hoy); }).join('') + '</div>';
+    });
+    if(!hay) h += '<div class="vacio">No hay vencimientos ni próximas acciones de deudores este mes.</div>';
+    return h + '</div></section>';
+  }
+
   function renderDeudores(d){
     var dd = calcularDeudores(d, state.q);
     var h = '<div class="tres" style="margin-top:6px">' +
@@ -1102,6 +1185,7 @@ function svgRecibo(r, logo, ejemplo) {
     h += '<div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="on" data-abrir-deudores="1">Informe de deudores (PDF)</button>' +
          '<span class="em">Solo cuotas que vencieron desde el 1 de enero de ' + esc(dd.anio) + '. Antes de septiembre, lo pagado sale del check de la planilla de Mel.</span></div>';
     if(dd.conflictos) h += '<div class="nota" style="margin-top:8px">⚠ ' + dd.conflictos + ' cuota(s) tienen datos en conflicto (tu Registro y la planilla de Mel no coinciden) y no se cuentan como deuda. Revisalas en Desglose, sección Diferencias.</div>';
+    h += calendarioDeudores(d);
     h += '<div style="margin-top:14px;display:flex;gap:6px;flex-wrap:wrap"><button class="' + (state.vistaDeudores === 'lista' ? 'on' : '') + '" data-vista-deudores="lista">Lista por situación en GHL</button><button class="' + (state.vistaDeudores === 'tablero' ? 'on' : '') + '" data-vista-deudores="tablero">Tablero de casos</button></div>';
     if(state.vistaDeudores === 'tablero') return h + renderTablero(d);
     var hay = false;
@@ -1307,7 +1391,7 @@ function svgRecibo(r, logo, ejemplo) {
     $('#tabCalendario').className = state.tab === 'calendario' ? 'on' : '';
     $('#tabDesglose').className = state.tab === 'desglose' ? 'on' : '';
     $('#tabDeudores').className = state.tab === 'deudores' ? 'on' : '';
-    $('#contenido').innerHTML = state.tab === 'calendario' ? renderCalendario(d, r, pasa) : (state.tab === 'deudores' ? renderDeudores(d) : renderDesglose(d, r, pasa));
+    $('#contenido').innerHTML = state.tab === 'calendario' ? notaDeudores(d) + renderCalendario(d, r, pasa) : (state.tab === 'deudores' ? renderDeudores(d) : notaDeudores(d) + renderDesglose(d, r, pasa));
     renderModal(d, pasa);
     renderInforme();
     renderRecibo();
@@ -1342,7 +1426,7 @@ function svgRecibo(r, logo, ejemplo) {
       })
       .then(function(d){
         if(d.error){ if(silencioso) mostrarToast('No se pudo actualizar: ' + d.error); else mostrarError(d.error); return; }
-        state.datos = d; state.registrados = [];
+        state.datos = d; state.registrados = []; ultimaCarga = Date.now();
         EDITABLE = !!d.escritura;
         if(d.opciones){
           if(d.opciones.medio && d.opciones.medio.length) MEDIOS = d.opciones.medio;
@@ -1367,6 +1451,21 @@ function svgRecibo(r, logo, ejemplo) {
     $('#login').classList.add('hidden'); $('#loginError').textContent = ''; cargar(false);
   });
   $('#btnActualizar').addEventListener('click', function(){ cargar(true); });
+
+  // ---- Actualización automática: los datos nunca quedan viejos aunque la página quede abierta ----
+  // Se vuelve a leer cuando pasaron más de 5 minutos, apenas se vuelve a la pestaña (si pasaron más de 2) y apenas cambia el día.
+  // No se actualiza mientras hay un formulario, una ficha, un recibo o el informe abiertos, para no pisar lo que se está escribiendo.
+  function hoyAR(){ try{ return new Intl.DateTimeFormat('en-CA', { timeZone:'America/Argentina/Buenos_Aires' }).format(new Date()); }catch(e){ return null; } }
+  function actualizarSiHaceFalta(maxEdad){
+    if(DEMO || !state.datos || document.hidden) return;
+    if(state.form || state.ficha || state.recibo || state.informe) return;
+    var ahora = Date.now();
+    if(ahora - ultimoIntento < 60 * 1000) return; // si falla, no insiste más de una vez por minuto
+    var cambioDeDia = !!(hoyAR() && state.datos.hoy && hoyAR() !== state.datos.hoy);
+    if(cambioDeDia || ahora - ultimaCarga > maxEdad){ ultimoIntento = ahora; cargar(true, true); }
+  }
+  setInterval(function(){ actualizarSiHaceFalta(5 * 60 * 1000); }, 60 * 1000);
+  document.addEventListener('visibilitychange', function(){ if(!document.hidden) actualizarSiHaceFalta(2 * 60 * 1000); });
   $('#buscar').addEventListener('input', function(e){ state.q = e.target.value; render(); });
   $('#fCuota').addEventListener('change', function(e){ state.cuota = e.target.value; render(); });
   document.addEventListener('click', function(e){
@@ -1412,6 +1511,12 @@ function svgRecibo(r, logo, ejemplo) {
     }
     if((b = t.closest('[data-tab]'))){ state.tab = b.getAttribute('data-tab'); state.dia = null; render(); return; }
     if((b = t.closest('[data-vista]'))){ state.vista = b.getAttribute('data-vista'); render(); return; }
+    if((b = t.closest('[data-mes-deu]'))){
+      var vd = b.getAttribute('data-mes-deu'), actualD = state.mesDeu || state.datos.hoy.slice(0, 7);
+      state.mesDeu = vd === 'hoy' ? state.datos.hoy.slice(0, 7) : mesMas(actualD, Number(vd));
+      render(); return;
+    }
+    if(t.closest('[data-toggle-cal-deu]')){ state.calDeu = state.calDeu === false; render(); return; }
     if((b = t.closest('[data-mes]'))){
       var v = b.getAttribute('data-mes'), actual = state.mes || state.datos.hoy.slice(0,7);
       state.mes = v === 'hoy' ? state.datos.hoy.slice(0,7) : mesMas(actual, Number(v));
