@@ -44,10 +44,18 @@ async function leerPlanillas() {
   try {
     datos = JSON.parse(txt);
   } catch {
-    throw new Error('El script de Google no devolvió datos válidos. Revisá que esté publicado para "Cualquier usuario".');
+    throw new Error(`El script de Google no devolvió datos válidos (HTTP ${r.status}). Google dijo: «${loQueDijoGoogle(txt)}». Revisá que esté publicado para "Cualquier usuario".`);
   }
   if (datos.error) throw new Error('Script de Google: ' + datos.error);
   return datos;
+}
+
+// Cuando Google contesta con una página (error, permiso pendiente, función no encontrada) en vez de datos, se resume lo que dice
+// para que el aviso muestre la causa real. Solo se usa lo que Google contestó, nunca lo que se le envió.
+function loQueDijoGoogle(txt) {
+  const sinCodigo = String(txt || '').replace(/<(script|style)[\s\S]*?<\/\1>/gi, ' ');
+  const cuerpo = sinCodigo.replace(/<[^>]+>/g, ' ').replace(/&[a-z]+;|&#\d+;/gi, ' ').replace(/\s+/g, ' ').trim();
+  return cuerpo ? cuerpo.slice(0, 240) : '(respuesta vacía)';
 }
 
 // Escribe a través del script de Google (la llave nunca sale de acá).
@@ -63,7 +71,7 @@ async function escribir(accion, datos) {
   try {
     out = JSON.parse(txt);
   } catch {
-    return { status: 502, cuerpo: { error: 'El script de Google no respondió bien. Revisá que esté publicado con la versión nueva.' } };
+    return { status: 502, cuerpo: { error: `El script de Google no respondió bien (HTTP ${r.status}). Google dijo: «${loQueDijoGoogle(txt)}». Revisá que esté publicado con la versión nueva.` } };
   }
   if (out.error) return { status: 400, cuerpo: { error: out.error } };
   return { status: 200, cuerpo: out };
