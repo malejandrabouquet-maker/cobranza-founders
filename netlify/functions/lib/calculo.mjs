@@ -14,17 +14,37 @@ const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 export const INICIO_CONTROL = '2026-09-01';
 const usd = (n) => 'US$ ' + Math.round(n).toLocaleString('es-AR');
 
-// "Cuota 2 Pagada" => 2 cuotas pagadas. "Cuota 3 Pendiente" => 2 pagadas (la 3 está por cobrar).
-// "Plan completo" => todo pagado. Las demás etapas no se controlan por cantidad de cuotas.
+// "Cuota 2 Pagada" => la 2 es la última pagada. "Cuota 3 Pendiente" => la 3 es la que está por cobrar (las anteriores, pagadas).
+// "Plan completo" => todo pagado. Las demás etapas no se controlan por cuota.
 export function etapaEsperada(etapa) {
   const e = String(etapa ?? '').trim();
   const m = /^Cuota (\d+) (pagada|pendiente)$/i.exec(e);
   if (m) {
     const k = Number(m[1]);
-    return { tipo: 'cuotas', pagadas: m[2].toLowerCase() === 'pagada' ? k : k - 1 };
+    const estado = m[2].toLowerCase();
+    return { tipo: 'cuotas', pagadas: estado === 'pagada' ? k : k - 1, k, estado };
   }
   if (/^plan completo$/i.test(e)) return { tipo: 'completo' };
   return null;
+}
+
+// Se compara por el NÚMERO de cuota y no por cuántas hay pagadas: en la planilla la numeración a veces salta
+// (por ejemplo 1, 3 y 4) y, aun así, "Cuota 4 Pendiente" es correcto si la 4 es la que falta y las anteriores están pagadas.
+export function etapaCoincide(exp, cuotas) {
+  return cuotas.every((c) => (c.n <= exp.pagadas) === !!c.pagada);
+}
+
+// El valor de la tarjeta es lo que faltaba cobrar cuando se cargó o se actualizó, y no siempre se baja al cobrar cada cuota.
+// Por eso es normal que sea MAYOR que el saldo si la diferencia son cuotas que ya se pagaron. Se acepta el saldo actual
+// o cualquier "suma desde la cuota j" (lo que faltaba antes de cobrar las anteriores). Solo se avisa si el valor es menor
+// que lo que falta, o si no coincide con ninguna de esas sumas.
+export function saldoCoincide(valor, cuotas) {
+  const ord = [...cuotas].sort((a, b) => a.n - b.n);
+  const saldo = ord.filter((c) => !c.pagada).reduce((s, c) => s + c.monto, 0);
+  if (Math.abs(valor - saldo) <= 0.5) return { ok: true, saldo };
+  const desdeCuota = ord.map((_, i) => ord.slice(i).reduce((s, c) => s + c.monto, 0));
+  if (valor > saldo + 0.5 && desdeCuota.some((x) => Math.abs(x - valor) <= 0.5)) return { ok: true, saldo, desactualizado: true };
+  return { ok: false, saldo, menor: valor < saldo };
 }
 
 const ORDEN_TIPOS = [
@@ -33,6 +53,8 @@ const ORDEN_TIPOS = [
   'pago sin tildar en la planilla',
   'tilde sin pago en tu Registro',
   'cuota inexistente en planilla',
+  'cuotas no suman el total',
+  'cuota sin fecha de vencimiento',
   'tarjeta duplicada',
   'sin tarjeta en el pipeline',
   'tarjeta sin planilla',
@@ -46,6 +68,17 @@ export function calcular({ madre = [], registro = [], tarjetas = [], hoy }) {
   const diferencias = [];
   const dif = (tipo, cliente, email, detalle) =>
     diferencias.push({ tipo, cliente: cliente || '', email: email || '', detalle });
+
+  // ---- Red de seguridad: si las cuotas que se leen no suman el total del contrato, puede haber una cuota sin leer ----
+  for (const r of madre) {
+    if (String(r.reembolso ?? '').trim().toUpperCase() === 'SI') continue;
+    const total = num(r.montoTotal);
+    if (!total || total <= 0) continue;
+    const suma = (r.cuotas || []).reduce((s, c) => s + (num(c && c.monto) ?? 0), 0);
+    if (Math.abs(total - suma) > Math.max(1, total * 0.02)) {
+      dif('cuotas no suman el total', r.nombre, normEmail(r.email), `El Monto total del contrato es ${usd(total)} y las cuotas que lee el tablero suman ${usd(suma)}. Puede haber una cuota que no se está leyendo o un monto mal cargado en la planilla de Mel.`);
+    }
+  }
 
   // ---- Planilla de Mel: una "inscripción" por fila, sin las reembolsadas ----
   const inscripciones = madre
@@ -79,11 +112,29 @@ export function calcular({ madre = [], registro = [], tarjetas = [], hoy }) {
     if (!tarjetasPorEmail.has(e)) tarjetasPorEmail.set(e, []);
     tarjetasPorEmail.get(e).push(t);
   }
+  // Clientes que Mel cargó SIN email: no se pueden cruzar por email, así que se buscan en el pipeline por nombre.
+  // Solo se miran tarjetas que no cruzaron con ningún cliente por email, y solo si el nombre coincide (o si el nombre cargado está
+  // contenido en el de UNA sola tarjeta). Si hay dudas, no se une nada.
+  const palabras = (n) => normNombre(n).split(' ').filter(Boolean);
+  const tarjetasLibres = tarjetas.filter((t) => { const e = normEmail(t.email); return !e || !porEmail.has(e); });
+  const tarjetaDeSinEmail = new Map(); // nombre normalizado -> tarjeta
+  const tarjetasUsadasPorNombre = new Set();
+  for (const i of inscripciones) {
+    if (i.email) continue;
+    const clave = normNombre(i.nombre);
+    if (!clave || tarjetaDeSinEmail.has(clave)) continue;
+    let candidatas = tarjetasLibres.filter((t) => normNombre(t.nombre) === clave);
+    if (candidatas.length === 0) {
+      const mias = palabras(i.nombre);
+      if (mias.length >= 2) candidatas = tarjetasLibres.filter((t) => { const suyas = palabras(t.nombre); return mias.every((w) => suyas.includes(w)) || (suyas.length >= 2 && suyas.every((w) => mias.includes(w))); });
+    }
+    if (candidatas.length === 1) { tarjetaDeSinEmail.set(clave, candidatas[0]); tarjetasUsadasPorNombre.add(candidatas[0]); }
+  }
   for (const [e, lista] of tarjetasPorEmail) {
     if (lista.length > 1) {
       dif('tarjeta duplicada', lista[0].nombre, e, `Hay ${lista.length} tarjetas para este cliente: ${lista.map((t) => t.etapa).join(' y ')}.`);
     }
-    if (!porEmail.has(e)) {
+    if (!porEmail.has(e) && !tarjetasUsadasPorNombre.has(lista[0])) {
       dif('tarjeta sin planilla', lista[0].nombre, e, `La tarjeta (${lista[0].etapa}) no tiene un cliente con ese email en la planilla de Mel.`);
     }
   }
@@ -91,8 +142,14 @@ export function calcular({ madre = [], registro = [], tarjetas = [], hoy }) {
   // ---- Cruce planilla vs pipeline, cliente por cliente ----
   const alertaPorEmail = new Set();
   for (const i of inscripciones) {
-    if (!i.email && i.cuotas.some((c) => !c.pagada && (!c.vence || c.vence >= INICIO_CONTROL))) {
-      dif('sin email en planilla', i.nombre, '', 'Tiene cuotas pendientes pero no tiene email en la planilla de Mel: no se puede cruzar con GHL ni con tu Registro.');
+    if (i.email) continue;
+    const pendientes = i.cuotas.filter((c) => !c.pagada && (!c.vence || c.vence >= INICIO_CONTROL));
+    if (!pendientes.length) continue;
+    const t = tarjetaDeSinEmail.get(normNombre(i.nombre));
+    if (t) {
+      dif('sin email en planilla', i.nombre, '', `Tiene cuotas pendientes pero no tiene email en la planilla de Mel. Se la encontró en el pipeline por nombre (${t.etapa}); cargale el email para cruzarla bien con GHL y con tu Registro.`);
+    } else {
+      dif('sin tarjeta en el pipeline', i.nombre, '', `Tiene ${pendientes.length} cuota(s) pendiente(s) desde septiembre en la planilla y no está en el pipeline. No tiene email en la planilla de Mel, por eso se buscó por nombre.`);
     }
   }
   for (const [email, filas] of porEmail) {
@@ -118,10 +175,10 @@ export function calcular({ madre = [], registro = [], tarjetas = [], hoy }) {
     const ref = activas[0] || (filas.length === 1 ? filas[0] : null);
 
     if (exp && ref) {
-      const pagadas = ref.cuotas.filter((c) => c.pagada).length;
-      if (exp.tipo === 'cuotas' && pagadas !== exp.pagadas) {
+      if (exp.tipo === 'cuotas' && !etapaCoincide(exp, ref.cuotas)) {
+        const lista = (a) => (a.length ? a.map((c) => c.n).join(', ') : 'ninguna');
         alertaPorEmail.add(email);
-        dif('etapa no coincide', nombre, email, `Planilla de Mel: ${pagadas} cuota(s) pagada(s). Pipeline: "${t.etapa}" (corresponde a ${exp.pagadas}).`);
+        dif('etapa no coincide', nombre, email, `Planilla de Mel: pagadas ${lista(ref.cuotas.filter((c) => c.pagada))}; sin pagar ${lista(ref.cuotas.filter((c) => !c.pagada))}. Pipeline: "${t.etapa}" (corresponde a ${exp.pagadas > 0 ? 'pagadas hasta la cuota ' + exp.pagadas : 'ninguna cuota pagada'}).`);
       }
       if (exp.tipo === 'completo' && activas.length > 0) {
         alertaPorEmail.add(email);
@@ -129,13 +186,16 @@ export function calcular({ madre = [], registro = [], tarjetas = [], hoy }) {
       }
     }
 
-    // El valor de la tarjeta debería ser lo que le falta pagar en total.
-    if (activas.length === 1 && !['Plan completo', 'Inicio'].includes(String(t.etapa).trim())) {
-      const saldo = activas[0].cuotas.filter((c) => !c.pagada).reduce((s, c) => s + c.monto, 0);
+    // El valor de la tarjeta debería ser lo que faltaba pagar (puede estar sin bajar si ya se cobró parte). Los clientes en
+    // Pausado por impago o Incobrable se siguen en Deudores y no se controlan acá.
+    if (activas.length === 1 && !['Plan completo', 'Inicio', 'Pausado por impago', 'Incobrable'].includes(String(t.etapa).trim())) {
       const valor = num(t.valor) ?? 0;
-      if (Math.abs(valor - saldo) > 0.5) {
+      const r = saldoCoincide(valor, activas[0].cuotas);
+      if (!r.ok) {
         alertaPorEmail.add(email);
-        dif('saldo no coincide', nombre, email, `La planilla de Mel dice que faltan ${usd(saldo)}. El valor de la tarjeta es ${usd(valor)}.`);
+        dif('saldo no coincide', nombre, email, r.menor
+          ? `La planilla de Mel dice que faltan ${usd(r.saldo)}. La tarjeta tiene ${usd(valor)}, menos de lo que falta.`
+          : `La planilla de Mel dice que faltan ${usd(r.saldo)}. La tarjeta tiene ${usd(valor)}, que no coincide con lo que faltaba en ningún momento del plan (¿se cargó mal?).`);
       }
     }
   }
@@ -201,8 +261,14 @@ export function calcular({ madre = [], registro = [], tarjetas = [], hoy }) {
   for (const t of tarjetas) { const e = normEmail(t.email); if (e && t.telefono && !telPorEmail.has(e)) telPorEmail.set(e, String(t.telefono)); }
   const cuotas = [];
   for (const i of inscripciones) {
+    // Una cuota sin fecha no puede aparecer en el calendario: se avisa para que no quede invisible (solo en clientes con actividad desde septiembre).
+    const sinFecha = i.cuotas.filter((c) => !c.pagada && !c.vence && c.n >= 2 && c.monto > 0);
+    const etapaI = i.email ? etapaDe(i.email) : null;
+    if (sinFecha.length && etapaI !== 'Incobrable' && etapaI !== 'Pausado por impago' && i.cuotas.some((c) => c.vence && c.vence >= INICIO_CONTROL)) {
+      dif('cuota sin fecha de vencimiento', i.nombre, i.email, `La cuota ${sinFecha.map((c) => c.n).join(' y ')} (${usd(sinFecha.reduce((t, c) => t + c.monto, 0))}) no tiene fecha de vencimiento en la planilla de Mel, así que no aparece en el calendario.`);
+    }
     for (const c of i.cuotas) {
-      const etapa = i.email ? etapaDe(i.email) : null;
+      const etapa = i.email ? etapaDe(i.email) : (tarjetaDeSinEmail.get(normNombre(i.nombre)) || {}).etapa || null;
       const enRegistro = i.email ? regPorEmail.has(`${i.email}|${c.n}`) : regPorNombre.has(`${normNombre(i.nombre)}|${c.n}`);
       const respaldoMel = c.pagada && (!c.vence || !registroDesde || c.vence < registroDesde);
       const cobrada = c.n === 1 ? c.pagada : enRegistro || respaldoMel;
