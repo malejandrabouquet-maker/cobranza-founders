@@ -277,12 +277,13 @@
   };
   function claveItem(it){ return it.tipo + ':' + (it.c.email || it.c.cliente) + '|' + it.c.n; }
   function colorDe(it){ return state.colores[claveItem(it)] || (it.tipo === 'aviso' ? 'rojo' : 'gris'); }
+  // Una cuota cobrada (según tu Registro o el check de Mel) se pinta sola: verde, o amarillo si faltan pasos por cerrar.
+  // El gris, el azul y el rojo siguen siendo a mano, para lo que todavía no se cobró.
   function colorMostrado(it){
-    var col = colorDe(it);
-    if(it.tipo === 'cuota' && col === 'verde' && state.datos && pasosPendientes(state.datos, it.c)) return 'amarillo';
-    return col;
+    if(it.tipo === 'cuota' && it.c.cobrada) return (state.datos && pasosPendientes(state.datos, it.c)) ? 'amarillo' : 'verde';
+    return colorDe(it);
   }
-  function etiquetaColor(it){ if(colorMostrado(it) === 'amarillo') return 'Pagó, faltan pasos por cerrar'; var c = colorDe(it); var o = OPCIONES[it.tipo].filter(function(x){ return x[0] === c; })[0]; return o ? o[1] : c; }
+  function etiquetaColor(it){ if(colorMostrado(it) === 'amarillo') return 'Pagó, faltan pasos por cerrar'; if(it.tipo === 'cuota' && it.c.cobrada) return 'Pagó'; var c = colorDe(it); var o = OPCIONES[it.tipo].filter(function(x){ return x[0] === c; })[0]; return o ? o[1] : c; }
   var MEDIOS = ['Transferencia en usd','Transferencia en ar','PayPal','STRIPE','Dolar App','Dolar App (pesos)','Efectivo (presencial)','Cheque']; // en el sitio real salen de las listas de tu Registro
   var CONFIRMA = ['Male','Mel','Vicky','Tommy','Mel / Vicky','-'];
   state.registrados = []; state.form = null; state.pasos = {}; state.recien = null; state.informe = null; state.recibo = null; state.recibos = {}; state.ultimoRegistro = null; state.casos = {}; state.historial = []; state.vistaDeudores = 'lista'; state.ficha = null; state.fichaRender = null; state.fichaErr = '';
@@ -695,7 +696,7 @@
       bloqueResumen('Mes', nombreMes(ym), nMes) + '</div>';
 
     h += '<div class="mesnav"><button data-mes="-1" aria-label="Mes anterior">‹</button><h2>' + esc(nombreMes(ym)) + '</h2><button data-mes="1" aria-label="Mes siguiente">›</button><button data-mes="hoy">Hoy</button></div>';
-    h += '<div class="leyenda"><span><i style="background:var(--c-gris)"></i>Cuota del día</span><span><i style="background:var(--c-azul)"></i>Ya le escribí</span><span><i style="background:var(--c-amarillo)"></i>Pagó, faltan pasos por cerrar</span><span><i style="background:var(--c-verde)"></i>Pagó y cerrado, o recordatorio enviado</span><span><i style="background:var(--c-rojo)"></i>Recordatorio (2 días antes)</span><span>⚠ Registro y planilla de Mel no coinciden</span></div>';
+    h += '<div class="leyenda"><span><i style="background:var(--c-gris)"></i>Cuota del día</span><span><i style="background:var(--c-azul)"></i>Ya le escribí</span><span><i style="background:var(--c-amarillo)"></i>Pagó, faltan pasos por cerrar</span><span><i style="background:var(--c-verde)"></i>Cobrada y cerrada (se pinta sola), o recordatorio enviado</span><span><i style="background:var(--c-rojo)"></i>Recordatorio (2 días antes)</span><span>⚠ Registro y planilla de Mel no coinciden</span></div>';
 
     var dias = diasDelGrid(ym);
     h += '<div class="cal">';
@@ -737,7 +738,9 @@
                              : 'Cuota ' + c.n + '/' + c.total + ' · ' + usd.format(c.monto)) +
         '<br><span class="em">Estado: ' + esc(etiquetaColor(it)) + ' · En tu Registro: ' + (c.cobrada ? 'pagada' : 'sin pago') + '</span></div>' +
         '<div>' + celdaEtapa(c) + (c.desfasada ? ' <span class="chip w" title="Tu Registro y la planilla de Mel no coinciden en esta cuota">⚠ revisar</span>' : '') + '</div>';
-      if(EDITABLE){
+      if(EDITABLE && it.tipo === 'cuota' && c.cobrada){
+        h += '<div class="nota" style="padding-left:22px;width:100%">Cobrada: el color se pone solo. Si faltan pasos, queda en amarillo.</div>';
+      } else if(EDITABLE){
         h += '<div class="colores">' + OPCIONES[it.tipo].map(function(o){
           return '<button class="cb ' + o[0] + (col === o[0] ? ' on' : '') + '" data-color="' + o[0] + '" data-key="' + esc(k) + '">' + esc(o[1]) + '</button>';
         }).join('') + (it.tipo === 'cuota' && !c.cobrada ? '<button class="cb reg" data-registrar="' + esc(claveCuota(c)) + '">Registrar pago</button>' : '') + '</div>';
