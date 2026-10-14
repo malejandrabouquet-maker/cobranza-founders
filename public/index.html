@@ -443,7 +443,26 @@
         cerrarForm(); aplicarRegistrados(state.datos); render();
         mostrarToast('Pago registrado en tu Registro: ' + c.cliente + ' ' + cuotaTxt, id2);
         colorGuardado.then(function(){ cargar(true, true); }); // se relee recién cuando el color ya se guardó
-      }).catch(function(e){ err.textContent = e.message; if(botonPago) botonPago.disabled = false; });
+      }).catch(function(e){
+        if(!e.sinRespuesta){ err.textContent = e.message; if(botonPago) botonPago.disabled = false; return; }
+        err.textContent = 'El servidor tardó en responder. Verificando si el pago quedó anotado…';
+        setTimeout(function(){
+          consultarFresco().then(function(d2){
+            var quedo = d2 && (d2.pagos || []).some(function(p){ return (p.email || p.cliente) === (c.email || c.cliente) && p.n === c.n; });
+            if(quedo){
+              var kc4 = 'cuota:' + claveCuota(c);
+              state.colores[kc4] = 'verde';
+              var colorG = api('guardarColor', { clave:kc4, color:'verde' }).catch(function(){});
+              state.recien = claveCuota(c); state.tab = 'calendario'; state.mes = c.vence.slice(0, 7); state.dia = c.vence; cerrarForm();
+              mostrarToast('Pago registrado en tu Registro: ' + c.cliente + ' ' + cuotaTxt + ' (el servidor tardó en confirmarlo).');
+              colorG.then(function(){ cargar(true, true); });
+            } else {
+              var err2 = $('#fp-err'); if(err2) err2.textContent = 'No se anotó: el servidor tardó demasiado. Probá de nuevo en un minuto.';
+              var bp2 = document.querySelector('[data-enviar-pago]'); if(bp2) bp2.disabled = false;
+            }
+          });
+        }, 2000);
+      });
       return;
     }
     var id = String(Date.now()), kc = 'cuota:' + claveCuota(c);
@@ -479,9 +498,22 @@
   }
   function claveAcceso(){ try{ return localStorage.getItem('cobranza_clave') || ''; }catch(e){ return ''; } }
   // Guarda en tu Google a través de /api/guardar (en la demo no se usa).
+  // Si el servidor tarda más de lo que Netlify espera (10 segundos), a la página le llega una página de error en vez de datos, aunque
+  // Google haya terminado de guardar. Ese caso se marca "sinRespuesta" para verificar solo si quedó guardado (pago, recibo).
   function api(accion, datos){
     return fetch('/api/guardar', { method:'POST', headers:{ 'x-password': claveAcceso(), 'content-type':'application/json' }, body: JSON.stringify({ accion: accion, datos: datos }) })
-      .then(function(r){ return r.json().then(function(j){ if(!r.ok || j.error) throw new Error(j.error || 'No se pudo guardar'); return j; }); });
+      .then(function(r){
+        return (r.text ? r.text() : r.json().then(function(j){ return JSON.stringify(j); })).then(function(txt){
+          var j = null; try{ j = JSON.parse(txt); }catch(e){}
+          if(!j){ var e1 = new Error('El servidor tardó demasiado en responder. Puede que se haya guardado igual: tocá Actualizar para verlo.'); e1.sinRespuesta = true; throw e1; }
+          if(!r.ok || j.error){ var e2 = new Error(j.error || 'No se pudo guardar'); e2.sinRespuesta = !!j.tardo; throw e2; }
+          return j;
+        });
+      }, function(){ var e3 = new Error('No hay conexión con el servidor. Revisá tu internet y probá de nuevo.'); e3.sinRespuesta = true; throw e3; });
+  }
+  // Vuelve a leer todo sin usar la memoria rápida; devuelve los datos o null si no se pudo.
+  function consultarFresco(){
+    return fetch('/api/cobranza?fresh=1', { headers: { 'x-password': claveAcceso() } }).then(function(r){ return r.json(); }).then(function(d){ return d && !d.error ? d : null; }).catch(function(){ return null; });
   }
   function puedeRecibo(d, c){
     var p = pagoDeCuota(d, c);
@@ -595,7 +627,7 @@
     colores['aviso:gabi.demo@demo.com|3'] = 'verde';
     var kz = 'zoe.demo@demo.com', ky = 'yago.demo@demo.com', kx = 'xena.demo@demo.com', casosDemo = {};
     casosDemo[kz] = { clave:kz, cliente:'Zoe Demo', email:kz, etapa:'En seguimiento', estado_caso:'Abierto', estado:'Moroso', ultimo_contacto:sumar(hoy, -20), quien_contacto:'Male', proxima_accion:'Escribirle de nuevo por WhatsApp', fecha_proxima:sumar(hoy, -6), responsable:'Male', situacion:'Dice que paga cuando cobre un trabajo. Hay que insistir con una fecha concreta.' };
-    casosDemo[ky] = { clave:ky, cliente:'Yago Demo', email:ky, etapa:'Escalado', estado_caso:'Abierto', estado:'Pausado por impago', ultimo_contacto:sumar(hoy, -30), quien_contacto:'Mel', proxima_accion:'Pasarle el caso a Tommy', fecha_proxima:sumar(hoy, 5), responsable:'Tommy', situacion:'Acceso cortado. Sin respuesta al mail formal.' };
+    casosDemo[ky] = { clave:ky, cliente:'Yago Demo', email:ky, etapa:'Escalado', estado_caso:'Abierto', estado:'Pausado por impago', fecha_baja:sumar(hoy, -45), ultimo_contacto:sumar(hoy, -30), quien_contacto:'Mel', proxima_accion:'Pasarle el caso a Tommy', fecha_proxima:sumar(hoy, 5), responsable:'Tommy', situacion:'Acceso cortado. Sin respuesta al mail formal.' };
     casosDemo[kx] = { clave:kx, cliente:'Xena Demo', email:kx, etapa:'Cerrado', estado_caso:'Cerrado', estado:'', situacion:'Cerrado: no contactar.' };
     var historialDemo = [
       { id:'hd1', clave:kz, fecha:sumar(hoy, -20), etapa:'En seguimiento', quien:'Male', texto:'Primer WhatsApp con la plantilla de recontacto', fuente:'WhatsApp', link:'' },
@@ -835,7 +867,17 @@ function svgRecibo(r, logo, ejemplo) {
     api('asignarRecibo', { clave:k, cliente:c.cliente, email:c.email, cuota:p.cuota || (c.n + '/' + c.total), monto:p.monto, fecha:p.fecha }).then(function(res){
       state.recibos[k] = { n: parseInt(String(res.resultado.numero).split('-')[1], 10) };
       state.recibo = k; render();
-    }).catch(function(e){ mostrarToast('No se pudo asignar el número de recibo: ' + e.message); });
+    }).catch(function(e){
+      if(!e.sinRespuesta){ mostrarToast('No se pudo asignar el número de recibo: ' + e.message); return; }
+      mostrarToast('El servidor tardó en responder. Verificando si el recibo se asignó…');
+      setTimeout(function(){
+        consultarFresco().then(function(d2){
+          var r2 = d2 && d2.estado && d2.estado.recibos && d2.estado.recibos[k];
+          if(r2){ state.recibos[k] = r2; state.recibo = k; render(); mostrarToast('Listo: el recibo ' + (r2.numero || '') + ' ya estaba asignado. Ya podés descargarlo.'); }
+          else mostrarToast('No se pudo asignar el número de recibo: el servidor tardó demasiado. Probá de nuevo en un minuto.');
+        });
+      }, 2000);
+    });
   }
   function renderRecibo(){
     var el = $('#recibo'), c = state.datos ? cuotaDeRecibo() : null;
@@ -873,18 +915,25 @@ function svgRecibo(r, logo, ejemplo) {
   function casoDe(k){ return state.casos[k] || {}; }
   // Un cliente que ya está en Deudores (en Pausado por impago o Incobrable en GHL, o con un caso en la pestaña) se maneja solo ahí:
   // sus cuotas sin cobrar no se muestran en el Calendario ni en el Desglose. Lo que ya cobró sí se sigue viendo.
-  function enDeudores(c){
+  function esDeudorDeFondo(c){
     var cobrada = c.cobrada === undefined ? c.pagada : c.cobrada;
     if(cobrada) return false;
     if(c.etapa === 'Pausado por impago' || c.etapa === 'Incobrable') return true;
     return !!state.casos[claveCaso(c.cliente, c.email)];
+  }
+  // Del calendario y del Desglose se aparta solo lo que venció ANTES de la semana pasada. Lo reciente (esta semana y la anterior) se
+  // sigue viendo acá para trabajarlo, aunque el cliente ya esté en Deudores.
+  function enDeudores(c){
+    if(!esDeudorDeFondo(c)) return false;
+    var desde = rangos(state.datos.hoy).anterior[0];
+    return !(c.vence && c.vence >= desde);
   }
   function notaDeudores(d){
     var n = 0, quienes = {};
     d.cuotas.forEach(function(c){ if(c.seguimiento && enDeudores(c)){ n++; quienes[claveCaso(c.cliente, c.email)] = true; } });
     if(!n) return '';
     var k = Object.keys(quienes).length;
-    return '<div class="nota" style="margin:8px 0 0">' + n + ' cuota' + (n === 1 ? '' : 's') + ' sin cobrar de ' + k + ' cliente' + (k === 1 ? '' : 's') + ' que ya ' + (k === 1 ? 'está' : 'están') + ' en Deudores no se ' + (n === 1 ? 'muestra' : 'muestran') + ' acá. ' +
+    return '<div class="nota" style="margin:8px 0 0">' + n + ' cuota' + (n === 1 ? '' : 's') + ' sin cobrar de ' + k + ' cliente' + (k === 1 ? '' : 's') + ' de Deudores (vencidas antes de la semana pasada) no se ' + (n === 1 ? 'muestra' : 'muestran') + ' acá. ' +
       '<button data-tab="deudores" style="background:none;border:0;padding:0;font:inherit;color:var(--c-azul);text-decoration:underline;cursor:pointer">Verlas en Deudores</button></div>';
   }
   function etapaDeCaso(k){ return casoDe(k).etapa || ETAPAS_CASO[0]; }
@@ -942,6 +991,7 @@ function svgRecibo(r, logo, ejemplo) {
       '<div class="em">' + (r.adeudado > 0 ? usd.format(r.adeudado) + ' adeudado' : 'sin deuda') + (r.mora ? ' · ' + r.mora + ' días' : '') + '</div>' +
       (urg ? '<div style="margin-top:6px"><span class="chip w">Urgente</span></div>' : '') +
       (c.estado ? '<div style="margin-top:6px"><span class="chip">' + esc(c.estado) + '</span></div>' : '') +
+      (c.fecha_baja ? '<div class="em" style="margin-top:6px">Baja o pausa: ' + esc(fechaConAnio(c.fecha_baja, d.hoy)) + '</div>' : '') +
       (c.proxima_accion ? '<div class="em" style="margin-top:6px">' + esc(c.proxima_accion) + (c.fecha_proxima ? ' (' + esc(corta(c.fecha_proxima)) + ')' : '') + '</div>' : '') +
       '<select data-mover="' + esc(k) + '" aria-label="Mover a otra etapa">' + ETAPAS_CASO.map(function(e){ return '<option' + (e === etapaDeCaso(k) ? ' selected' : '') + '>' + esc(e) + '</option>'; }).join('') + '</select></div>';
   }
@@ -1001,6 +1051,12 @@ function svgRecibo(r, logo, ejemplo) {
     }
     h += '<h4>Estado del caso <small>' + (ghlFamilia ? 'GHL dice: ' + esc(ghlFamilia) : (r && r.etapaGHL ? 'GHL: ' + esc(r.etapaGHL) : 'sin tarjeta en GHL')) + '</small></h4>' +
       '<select id="fi-estado">' + opcionesSel(ESTADOS_CASO, c.estado || '', 'Elegí un estado') + '</select>';
+    if(c.fecha_baja){
+      var diasBaja = diasAtraso(d.hoy, c.fecha_baja);
+      h += '<div class="nota" id="fi-baja-info"><b>Baja o pausa del servicio:</b> ' + esc(fechaConAnio(c.fecha_baja, d.hoy)) + (diasBaja > 0 ? ' (hace ' + diasBaja + ' días)' : '') + '</div>';
+    } else if(c.estado === 'Dado de baja' || c.estado === 'Pausado por impago'){
+      h += '<div class="nota" id="fi-baja-info" style="color:var(--warn)">Falta cargar la fecha de la baja o pausa del servicio (abajo, en Seguimiento).</div>';
+    }
     if(ghlFamilia && !c.estado) h += '<div class="nota" style="color:var(--warn)">No se cargó ningún estado para no pisar lo que diga GHL ni lo que diga la planilla vieja. Elegí el correcto.</div>';
     if(ghlFamilia && c.estado && c.estado !== ghlFamilia && (c.estado === 'Incobrable' || c.estado === 'Pausado por impago')) h += '<div class="nota" style="color:var(--warn)">⚠ No coincide con GHL, que tiene la tarjeta en "' + esc(ghlFamilia) + '".</div>';
     h += '<h4>Seguimiento <small>a mano</small></h4><div class="rejilla">' +
@@ -1009,11 +1065,13 @@ function svgRecibo(r, logo, ejemplo) {
       '<div><label for="fi-prox">Próxima acción</label><input id="fi-prox" type="text" value="' + esc(c.proxima_accion || '') + '" placeholder="Qué hay que hacer"></div>' +
       '<div><label for="fi-fprox">Para cuándo</label><input id="fi-fprox" type="date" value="' + esc(c.fecha_proxima || '') + '"></div>' +
       '<div><label for="fi-resp">Responsable</label><select id="fi-resp">' + opcionesSel(QUIENES, c.responsable || '', 'Sin asignar') + '</select></div>' +
+      '<div><label for="fi-fbaja">Baja o pausa del servicio</label><input id="fi-fbaja" type="date" value="' + esc(c.fecha_baja || '') + '"></div>' +
       '<div><label for="fi-ruta">Hoja de ruta (link)</label><input id="fi-ruta" type="text" value="' + esc(c.hoja_ruta || '') + '" placeholder="https://"></div></div>' +
       '<label for="fi-sit">Situación y detalle</label><textarea id="fi-sit" placeholder="Qué sabemos de este caso">' + esc(c.situacion || '') + '</textarea>' +
       '<div id="fi-err" class="err">' + esc(state.fichaErr || '') + '</div><div class="botones"><button class="on" data-guardar-caso="1">Guardar cambios</button></div>';
     var manual = state.historial.filter(function(x){ return x.clave === k; });
-    var todo = manual.concat(r ? historialAuto(d, r) : []).sort(function(a, b){ return String(b.fecha || '').localeCompare(String(a.fecha || '')) || (a.auto ? 1 : 0) - (b.auto ? 1 : 0); });
+    var eventoBaja = c.fecha_baja ? [{ id:'baja', fecha:c.fecha_baja, texto:'Baja o pausa del servicio', fuente:'Ficha del caso', auto:true }] : [];
+    var todo = manual.concat(r ? historialAuto(d, r) : [], eventoBaja).sort(function(a, b){ return String(b.fecha || '').localeCompare(String(a.fecha || '')) || (a.auto ? 1 : 0) - (b.auto ? 1 : 0); });
     h += '<h4>Historial <small>' + manual.length + ' cargado(s) a mano</small></h4>' +
       '<div class="rejilla"><div><label for="fi-hfecha">Fecha</label><input id="fi-hfecha" type="date" value="' + esc(d.hoy) + '"></div>' +
       '<div><label for="fi-hfuente">Fuente</label><select id="fi-hfuente">' + opcionesSel(FUENTES, '', 'Elegí la fuente') + '</select></div></div>' +
@@ -1025,7 +1083,7 @@ function svgRecibo(r, logo, ejemplo) {
         '<span>' + (x.auto ? '' : '<button data-borrar-hist="' + esc(x.id) + '" aria-label="Borrar" style="padding:2px 8px">×</button> ') + '<span class="chip">' + esc(x.fuente || 'a mano') + '</span></span></div>';
     }).join('') : '<div class="vacio">Todavía no hay nada en el historial.</div>';
     h += '</div>';
-    var faltan = []; if(!c.estado) faltan.push('estado'); if(!c.ultimo_contacto) faltan.push('último contacto'); if(!c.proxima_accion) faltan.push('próxima acción'); if(!c.responsable) faltan.push('responsable'); if(!c.situacion) faltan.push('situación');
+    var faltan = []; if(!c.estado) faltan.push('estado'); if(!c.ultimo_contacto) faltan.push('último contacto'); if(!c.proxima_accion) faltan.push('próxima acción'); if(!c.responsable) faltan.push('responsable'); if(!c.situacion) faltan.push('situación'); if(c.estado === 'Dado de baja' && !c.fecha_baja) faltan.push('fecha de baja');
     h += '<div class="nota">' + (faltan.length ? 'Falta completar: ' + esc(faltan.join(', ')) + '.' : 'Ficha completa.') + ' Lo que se contradice entre fuentes queda vacío hasta que lo confirmes.</div></div>';
     el.innerHTML = h; el.classList.remove('hidden'); state.fichaRender = k;
   }
@@ -1036,7 +1094,7 @@ function svgRecibo(r, logo, ejemplo) {
   function errorFicha(m){ state.fichaErr = m; var e = $('#fi-err'); if(e) e.textContent = m; }
   function guardarFicha(){
     var f = datosFicha(), v = function(id){ return ($('#' + id) || { value: '' }).value; };
-    var campos = { estado:v('fi-estado'), ultimo_contacto:v('fi-ultimo'), quien_contacto:v('fi-quienc'), proxima_accion:v('fi-prox').trim(), fecha_proxima:v('fi-fprox'), responsable:v('fi-resp'), hoja_ruta:v('fi-ruta').trim(), situacion:v('fi-sit').trim() };
+    var campos = { estado:v('fi-estado'), ultimo_contacto:v('fi-ultimo'), quien_contacto:v('fi-quienc'), proxima_accion:v('fi-prox').trim(), fecha_proxima:v('fi-fprox'), responsable:v('fi-resp'), hoja_ruta:v('fi-ruta').trim(), situacion:v('fi-sit').trim(), fecha_baja:v('fi-fbaja') };
     if(campos.hoja_ruta && !/^https?:\/\//i.test(campos.hoja_ruta)){ errorFicha('El link de la hoja de ruta tiene que empezar con http o https.'); return; }
     errorFicha('');
     guardarCasoCampos(f.k, campos, f.nombre, f.email).then(function(){ mostrarToast('Caso guardado'); renderFicha(true); render(); }).catch(function(){});
@@ -1101,11 +1159,13 @@ function svgRecibo(r, logo, ejemplo) {
     out.totalSinFecha = suma(out.sinFecha, 'monto'); out.nCuotasSinFecha = out.sinFecha.reduce(function(s2, x){ return s2 + x.n; }, 0);
     return out;
   }
+  // Fecha de la baja o pausa del servicio de un caso (con el año si no es el actual) o "sin dato".
+  function fechaBajaTxt(f){ return f ? esc(fechaConAnio(f, state.datos.hoy)) : '<span class="em">sin dato</span>'; }
   function tablaDeudores(l, conFicha){
-    var cols = [{t:'Cliente'},{t:'Cuotas impagas'},{t:'Monto adeudado',m:1},{t:'La más antigua venció'},{t:'Días de mora',m:1},{t:'Etapa en GHL'}];
+    var cols = [{t:'Cliente'},{t:'Cuotas impagas'},{t:'Monto adeudado',m:1},{t:'La más antigua venció'},{t:'Días de mora',m:1},{t:'Etapa en GHL'},{t:'Baja o pausa'}];
     if(conFicha){ cols.push({t:'Etapa del caso'}); cols.push({t:''}); }
     return tabla(cols, l.map(function(x){
-      var fila = [esc(x.cliente) + (x.email ? '<div class="em">' + esc(x.email) + '</div>' : '<div class="em">sin email</div>'), esc(x.cuotas), usd.format(x.monto), esc(corta(x.antigua)), String(x.dias), x.etapa ? esc(x.etapa) : '<span class="em">sin tarjeta</span>'];
+      var fila = [esc(x.cliente) + (x.email ? '<div class="em">' + esc(x.email) + '</div>' : '<div class="em">sin email</div>'), esc(x.cuotas), usd.format(x.monto), esc(corta(x.antigua)), String(x.dias), x.etapa ? esc(x.etapa) : '<span class="em">sin tarjeta</span>', fechaBajaTxt(casoDe(claveCaso(x.cliente, x.email)).fecha_baja)];
       if(conFicha){ var k = claveCaso(x.cliente, x.email); fila.push('<span class="chip">' + esc(etapaDeCaso(k)) + '</span>' + (esUrgente(k, state.datos.hoy) ? ' <span class="chip w">Urgente</span>' : ''), '<button data-ficha="' + esc(k) + '">Abrir ficha</button>'); }
       return fila;
     }));
@@ -1117,7 +1177,7 @@ function svgRecibo(r, logo, ejemplo) {
   // ---- Calendario de deudores: solo fechas y quiénes debían pagar, más las próximas acciones de cada caso ----
   function esCuotaDeDeudor(c){
     var cobrada = c.cobrada === undefined ? c.pagada : c.cobrada;
-    return !cobrada && !!c.vence && (c.n >= 2 || !c.pagada) && enDeudores(c);
+    return !cobrada && !!c.vence && (c.n >= 2 || !c.pagada) && esDeudorDeFondo(c);
   }
   function itemsDeudores(d, q){
     var items = {}, coincide = function(nombre, email){ return !q || ((nombre || '') + ' ' + (email || '')).toLowerCase().indexOf(q) >= 0; };
