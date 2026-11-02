@@ -257,6 +257,9 @@ export function calcular({ madre = [], registro = [], tarjetas = [], hoy }) {
   // el check de Mel sirve de respaldo.
   const regPorEmail = new Set(pagos.filter((p) => p.email && p.n != null).map((p) => `${p.email}|${p.n}`));
   const regPorNombre = new Set(pagos.filter((p) => p.cliente && p.n != null).map((p) => `${normNombre(p.cliente)}|${p.n}`));
+  // Plan B: un pago del Registro SIN email se engancha por nombre, aunque en la planilla de Mel el cliente sí tenga email.
+  // (Solo los pagos sin email: si el pago trae otro email, se respeta y no se mezcla.)
+  const regSinEmailPorNombre = new Set(pagos.filter((p) => !p.email && p.cliente && p.n != null).map((p) => `${normNombre(p.cliente)}|${p.n}`));
   const telPorEmail = new Map();
   for (const t of tarjetas) { const e = normEmail(t.email); if (e && t.telefono && !telPorEmail.has(e)) telPorEmail.set(e, String(t.telefono)); }
   const cuotas = [];
@@ -269,7 +272,9 @@ export function calcular({ madre = [], registro = [], tarjetas = [], hoy }) {
     }
     for (const c of i.cuotas) {
       const etapa = i.email ? etapaDe(i.email) : (tarjetaDeSinEmail.get(normNombre(i.nombre)) || {}).etapa || null;
-      const enRegistro = i.email ? regPorEmail.has(`${i.email}|${c.n}`) : regPorNombre.has(`${normNombre(i.nombre)}|${c.n}`);
+      const enRegistro = i.email
+        ? regPorEmail.has(`${i.email}|${c.n}`) || regSinEmailPorNombre.has(`${normNombre(i.nombre)}|${c.n}`)
+        : regPorNombre.has(`${normNombre(i.nombre)}|${c.n}`);
       const respaldoMel = c.pagada && (!c.vence || !registroDesde || c.vence < registroDesde);
       const cobrada = c.n === 1 ? c.pagada : enRegistro || respaldoMel;
       // El Registro y el check de Mel dicen cosas distintas (solo se mira desde que empieza el Registro).
