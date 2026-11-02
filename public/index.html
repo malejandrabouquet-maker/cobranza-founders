@@ -1293,7 +1293,8 @@ function svgRecibo(r, logo, ejemplo) {
 
   // ---- Informe semanal (hoja para guardar como PDF) ----
   function datosInforme(d, cual){
-    var r = rangos(d.hoy), rg = cual === 'anterior' ? r.anterior : r.semana;
+    var r = rangos(d.hoy), esMes = typeof cual === 'string' && cual.indexOf('mes:') === 0, ym = esMes ? cual.slice(4) : null;
+    var rg = esMes ? rangoMes(ym) : (cual === 'anterior' ? r.anterior : r.semana);
     var seg = d.cuotas.filter(function(c){ return c.seguimiento && cuentaEnReporte(c); }); // lo del closer y de deudores va aparte
     var deb = seg.filter(function(c){ return en(c.vence, rg); });
     var cob = deb.filter(function(c){ return c.cobrada; });
@@ -1312,21 +1313,22 @@ function svgRecibo(r, logo, ejemplo) {
       return c && c.vence && c.vence < rg[0] ? { cliente:p.cliente, cuota:p.cuota, monto:p.monto, fecha:p.fecha, medio:p.medio, vencia:c.vence } : null;
     }).filter(Boolean).sort(function(a, b){ return a.fecha.localeCompare(b.fecha); });
     var viejas = seg.filter(function(c){ return !c.cobrada && c.vence && c.vence < rg[0]; }).sort(function(a, b){ return a.vence.localeCompare(b.vence); });
-    var apartes = d.cuotas.filter(function(c){ return cuotaVisible(c) && !c.cobrada && !esCloser(c) && clienteEsDeudor(c) && c.vence && c.vence < rg[0]; }).sort(function(a, b){ return a.vence.localeCompare(b.vence); });
+    var apartes = d.cuotas.filter(function(c){ return cuotaVisible(c) && !c.cobrada && !esCloser(c) && clienteEsDeudor(c) && c.vence && c.vence <= rg[1] && c.vence <= d.hoy; }) // deudores ya vencidos, de antes o de dentro del período.sort(function(a, b){ return a.vence.localeCompare(b.vence); });
     var delCloser = d.cuotas.filter(function(c){ return cuotaVisible(c) && !c.cobrada && esCloser(c) && c.vence && en(c.vence, rg); });
     var debe = suma(deb, 'monto'), va = suma(cob, 'monto');
-    return { cual:cual, rg:rg, hoy:d.hoy, debe:debe, nDeb:deb.length, va:va, nCob:cob.length, pct: debe ? Math.round(va / debe * 100) : 0, falta: debe - va,
+    return { cual:cual, unidad: esMes ? 'mes' : 'semana', ym:ym, rg:rg, hoy:d.hoy, debe:debe, nDeb:deb.length, va:va, nCob:cob.length, pct: debe ? Math.round(va / debe * 100) : 0, falta: debe - va,
              pagaron:pagaron, alDia:alDia, noPagaron:noPag, anteriores: viejas, pausados: apartes, recuperados: recuperados, delCloser: delCloser };
   }
   function diasAtraso(hoy, vence){ return Math.round((parse(hoy) - parse(vence)) / 86400000); }
   function fechaConAnio(f, hoy){ return !f ? 'sin fecha' : corta(f) + (f.slice(0, 4) !== hoy.slice(0, 4) ? ' ' + f.slice(0, 4) : ''); }
-  function tituloInforme(inf){ return 'Semana del ' + corta(inf.rg[0]) + ' al ' + corta(inf.rg[1]) + ' de ' + inf.rg[1].slice(0, 4); }
+  function tituloInforme(inf){ if(inf.unidad === 'mes') return 'Mes de ' + nombreMes(inf.ym); return 'Semana del ' + corta(inf.rg[0]) + ' al ' + corta(inf.rg[1]) + ' de ' + inf.rg[1].slice(0, 4); }
   function htmlInforme(inf){
     var fa = function(f){ return esc(fechaConAnio(f, inf.hoy)); };
+    var esU = inf.unidad === 'mes' ? 'este mes' : 'esta semana', deU = inf.unidad === 'mes' ? 'del mes' : 'de la semana', ant = inf.unidad === 'mes' ? 'meses' : 'semanas';
     var tp = function(l){ return l.length ? tabla([{t:'Cliente'},{t:'Cuota'},{t:'Monto',m:1},{t:'Pagó el'},{t:'Medio'}], l.map(function(p){
-      return [esc(p.cliente) + (p.revisar ? ' ⚠' : ''), esc(p.cuota), usd.format(p.monto), p.fecha ? fa(p.fecha) : '<span class="em">sin dato en el Registro</span>', esc(p.medio)]; })) : '<div class="vacio">Nadie pagó en esta semana.</div>'; };
+      return [esc(p.cliente) + (p.revisar ? ' ⚠' : ''), esc(p.cuota), usd.format(p.monto), p.fecha ? fa(p.fecha) : '<span class="em">sin dato en el Registro</span>', esc(p.medio)]; })) : '<div class="vacio">Nadie pagó en ' + esU + '.</div>'; };
     var tn = function(l){ return l.length ? tabla([{t:'Cliente'},{t:'Cuota'},{t:'Monto',m:1},{t:'Vence'},{t:'Etapa en GHL'}], l.map(function(c){
-      return [esc(c.cliente), c.n + '/' + c.total, usd.format(c.monto), fa(c.vence), c.etapa ? esc(c.etapa) : 'sin tarjeta']; })) : '<div class="vacio">Todas las cuotas de la semana están cobradas.</div>'; };
+      return [esc(c.cliente), c.n + '/' + c.total, usd.format(c.monto), fa(c.vence), c.etapa ? esc(c.etapa) : 'sin tarjeta']; })) : '<div class="vacio">Todas las cuotas ' + deU + ' están cobradas.</div>'; };
     var ta = function(l){ return tabla([{t:'Cliente'},{t:'Cuota'},{t:'Monto',m:1},{t:'Venció'},{t:'Días de atraso',m:1},{t:'Etapa en GHL'}], l.map(function(c){
       return [esc(c.cliente), c.n + '/' + c.total, usd.format(c.monto), fa(c.vence), String(diasAtraso(inf.hoy, c.vence)), c.etapa ? esc(c.etapa) : 'sin tarjeta']; })); };
     var h = '<div class="hoja"><h1>Informe de Cobranza</h1><div class="sub">' + esc(tituloInforme(inf)) + ' · generado el ' + esc(corta(inf.hoy)) + '</div>' +
@@ -1335,15 +1337,15 @@ function svgRecibo(r, logo, ejemplo) {
       '<div class="cifra"><span>Falta</span><b>' + usd.format(inf.falta) + '</b><span>' + (inf.nDeb - inf.nCob) + ' cuota(s)</span></div></div>' +
       '<h2>Quiénes pagaron <small>' + inf.pagaron.length + ' pago(s) · ' + usd.format(inf.va) + '</small></h2>' + tp(inf.pagaron) +
       (inf.pagaron.some(function(p){ return p.revisar; }) ? '<div class="em" style="margin-top:6px">⚠ El Registro y la planilla de Mel no coinciden en esta cuota (por ejemplo, el número de cuota). Conviene revisarla antes de enviar el informe.</div>' : '');
-    if(inf.alDia.length) h += '<div class="em" style="margin-top:10px">Además, esta semana se pusieron al día ' + inf.alDia.length + ' cuota(s) atrasadas por ' + usd.format(suma(inf.alDia, 'monto')) + ':</div>' +
+    if(inf.alDia.length) h += '<div class="em" style="margin-top:10px">Además, ' + esU + ' se pusieron al día ' + inf.alDia.length + ' cuota(s) atrasadas por ' + usd.format(suma(inf.alDia, 'monto')) + ':</div>' +
       tabla([{t:'Cliente'},{t:'Cuota'},{t:'Monto',m:1},{t:'Venció'},{t:'Pagó el'}], inf.alDia.map(function(p){ return [esc(p.cliente), esc(p.cuota), usd.format(p.monto), fa(p.vencia), fa(p.fecha)]; }));
     h += '<h2>Quiénes no pagaron <small>' + inf.noPagaron.length + ' cuota(s) · ' + usd.format(suma(inf.noPagaron, 'monto')) + '</small></h2>' + tn(inf.noPagaron) +
-      '<h2>Deudas de semanas anteriores <small>' + inf.anteriores.length + ' cuota(s) · ' + usd.format(suma(inf.anteriores, 'monto')) + '</small></h2>' +
-      (inf.anteriores.length ? ta(inf.anteriores) + '<div class="total">Total: ' + usd.format(suma(inf.anteriores, 'monto')) + '</div>' : '<div class="vacio">No hay deudas de semanas anteriores.</div>');
+      '<h2>Deudas de ' + ant + ' anteriores <small>' + inf.anteriores.length + ' cuota(s) · ' + usd.format(suma(inf.anteriores, 'monto')) + '</small></h2>' +
+      (inf.anteriores.length ? ta(inf.anteriores) + '<div class="total">Total: ' + usd.format(suma(inf.anteriores, 'monto')) + '</div>' : '<div class="vacio">No hay deudas de ' + ant + ' anteriores.</div>');
     if(inf.pausados.length) h += '<h2>Aparte: clientes en deudores (no cuentan en los totales) <small>' + inf.pausados.length + ' cuota(s) · ' + usd.format(suma(inf.pausados, 'monto')) + '</small></h2>' + ta(inf.pausados);
     if(inf.delCloser.length) h += '<h2>Aparte: cobros del closer (no cuentan en los totales) <small>' + inf.delCloser.length + ' cuota(s) · ' + usd.format(suma(inf.delCloser, 'monto')) + '</small></h2>' + tabla([{t:'Cliente'},{t:'Cuota'},{t:'Monto',m:1},{t:'Vence'}], inf.delCloser.map(function(c){ return [esc(c.cliente), c.n + '/' + c.total, usd.format(c.monto), fa(c.vence)]; }));
-    h += '<h2>Recuperado de deudores esta semana <small>' + inf.recuperados.length + ' pago(s) · ' + usd.format(suma(inf.recuperados, 'monto')) + '</small></h2>' +
-      (inf.recuperados.length ? tabla([{t:'Cliente'},{t:'Cuota'},{t:'Monto',m:1},{t:'Pagó el'},{t:'Medio'}], inf.recuperados.map(function(p){ return [esc(p.cliente), esc(p.cuota), usd.format(p.monto), fa(p.fecha), esc(p.medio)]; })) + '<div class="total">Total recuperado: ' + usd.format(suma(inf.recuperados, 'monto')) + ' (no está sumado en "Entró")</div>' : '<div class="vacio">Esta semana no se recuperó nada de deudores.</div>');
+    h += '<h2>Recuperado de deudores ' + esU + ' <small>' + inf.recuperados.length + ' pago(s) · ' + usd.format(suma(inf.recuperados, 'monto')) + '</small></h2>' +
+      (inf.recuperados.length ? tabla([{t:'Cliente'},{t:'Cuota'},{t:'Monto',m:1},{t:'Pagó el'},{t:'Medio'}], inf.recuperados.map(function(p){ return [esc(p.cliente), esc(p.cuota), usd.format(p.monto), fa(p.fecha), esc(p.medio)]; })) + '<div class="total">Total recuperado: ' + usd.format(suma(inf.recuperados, 'monto')) + ' (no está sumado en "Entró")</div>' : '<div class="vacio">' + (inf.unidad === 'mes' ? 'Este mes' : 'Esta semana') + ' no se recuperó nada de deudores.</div>');
     return h + '<div class="pie2">Generado desde el Tablero de Cobranza. Los clientes en deudores y los cobros del closer van aparte y no suman en "Debía entrar" ni en "Entró". Importes en dólares.</div></div>';
   }
   function textoSlack(inf){
@@ -1364,7 +1366,7 @@ function svgRecibo(r, logo, ejemplo) {
     if(inf.noPagaron.length) inf.noPagaron.forEach(function(c){ L.push('• ' + c.cliente + ' ' + c.n + '/' + c.total + ' · ' + usd.format(c.monto) + ' · vence ' + fa(c.vence)); }); else L.push('• Ninguno');
     L.push('');
     if(inf.recuperados.length){ L.push('*Recuperado de deudores (aparte, no suma en Entró):* ' + usd.format(suma(inf.recuperados, 'monto')) + ' (' + inf.recuperados.length + ' pagos)'); L.push(''); }
-    L.push('*Deudas de semanas anteriores (' + inf.anteriores.length + ' cuotas · ' + usd.format(suma(inf.anteriores, 'monto')) + ')*');
+    L.push('*Deudas de ' + (inf.unidad === 'mes' ? 'meses' : 'semanas') + ' anteriores (' + inf.anteriores.length + ' cuotas · ' + usd.format(suma(inf.anteriores, 'monto')) + ')*');
     if(inf.anteriores.length) inf.anteriores.forEach(function(c){ L.push('• ' + c.cliente + ' ' + c.n + '/' + c.total + ' · ' + usd.format(c.monto) + ' · venció ' + fa(c.vence) + ' (' + diasAtraso(inf.hoy, c.vence) + ' días)'); }); else L.push('• Ninguna');
     if(inf.pausados.length){ L.push(''); L.push('*Aparte, en Pausado por impago (' + inf.pausados.length + ' cuotas · ' + usd.format(suma(inf.pausados, 'monto')) + ')*'); inf.pausados.forEach(function(c){ L.push('• ' + c.cliente + ' ' + c.n + '/' + c.total + ' · ' + usd.format(c.monto) + ' · venció ' + fa(c.vence)); }); }
     return L.join('\n').replace(/\u00a0/g, ' '); // el formato de moneda usa un espacio especial: lo cambio por uno común
@@ -1377,10 +1379,12 @@ function svgRecibo(r, logo, ejemplo) {
         '<div class="nota noprint" style="margin:0 0 10px">En la ventana que se abre, elegí "Guardar como PDF" como destino.</div>' + htmlDeudores(calcularDeudores(state.datos, '')) + '</div>';
       el.classList.remove('hidden'); return;
     }
-    var inf = datosInforme(state.datos, state.informe);
+    var inf = datosInforme(state.datos, state.informe), mesAct = 'mes:' + state.datos.hoy.slice(0, 7), mesAnt = 'mes:' + mesMas(state.datos.hoy.slice(0, 7), -1);
     el.innerHTML = '<div class="informe-wrap"><div class="barra-informe">' +
       '<button class="' + (state.informe === 'actual' ? 'on' : '') + '" data-informe="actual">Semana en curso</button>' +
       '<button class="' + (state.informe === 'anterior' ? 'on' : '') + '" data-informe="anterior">Semana anterior</button>' +
+      '<button class="' + (state.informe === mesAct ? 'on' : '') + '" data-informe="' + mesAct + '">Mes en curso</button>' +
+      '<button class="' + (state.informe === mesAnt ? 'on' : '') + '" data-informe="' + mesAnt + '">Mes anterior</button>' +
       '<span style="flex:1"></span><button data-copiar-slack="1">Copiar texto para Slack</button>' +
       '<button class="on" data-imprimir="1">Descargar PDF</button><button data-cerrar-informe="1">Cerrar</button></div>' +
       '<div class="nota noprint" style="margin:0 0 10px">En la ventana que se abre, elegí "Guardar como PDF" como destino.</div>' + htmlInforme(inf) + '</div>';
@@ -1420,7 +1424,7 @@ function svgRecibo(r, logo, ejemplo) {
     var closers = enMes.filter(function(c){ return esCloser(c); }).sort(porVence);
     var btns = function(c, conCloser){ return !EDITABLE ? '' : '<button class="cb reg" data-registrar="' + esc(claveCuota(c)) + '">Registrar pago</button>' + (conCloser ? ' <button class="cb morado" data-closer="' + esc(claveCuota(c)) + '">Cobro del closer</button>' : ''); };
     var falta = nm.debe - nm.va;
-    var h = '<section class="repmes"><div class="mesnav"><button data-mes-des="-1" aria-label="Mes anterior">‹</button><h2>Reporte de ' + esc(nombreMes(ym)) + '</h2><button data-mes-des="1" aria-label="Mes siguiente">›</button><button data-mes-des="hoy">Mes actual</button></div>' +
+    var h = '<section class="repmes"><div class="mesnav"><button data-mes-des="-1" aria-label="Mes anterior">‹</button><h2>Reporte de ' + esc(nombreMes(ym)) + '</h2><button data-mes-des="1" aria-label="Mes siguiente">›</button><button data-mes-des="hoy">Mes actual</button><button class="on" style="margin-left:auto" data-abrir-informe-mes="' + ym + '">Descargar informe de ' + esc(nombreMes(ym)) + ' (PDF)</button></div>' +
       '<div class="mini" style="margin:4px 0 10px">Debe entrar <b>' + usd.format(nm.debe) + '</b> · Va <b>' + usd.format(nm.va) + '</b> (' + nm.pct + '%) · Falta <b>' + usd.format(falta) + '</b> (' + (nm.n - nm.nCob) + ' cuota(s))' +
       (nm.recuperado ? ' · <span class="recup">Recuperado de deudores (aparte): <b>' + usd.format(nm.recuperado) + '</b></span>' : '') + '</div>';
     h += '<h3 style="margin:8px 0 4px">Lo que falta cobrar <small>' + faltan.length + ' cuota(s) · ' + usd.format(suma(faltan, 'monto')) + '</small></h3>' +
@@ -1583,6 +1587,7 @@ function svgRecibo(r, logo, ejemplo) {
   document.addEventListener('click', function(e){
     var t = e.target.closest ? e.target : null; if(!t) return;
     var b;
+    if((b = t.closest('[data-abrir-informe-mes]'))){ state.informe = 'mes:' + b.getAttribute('data-abrir-informe-mes'); render(); return; }
     if(t.closest('[data-abrir-informe]')){ state.informe = 'actual'; render(); return; }
     if((b = t.closest('[data-informe]'))){ state.informe = b.getAttribute('data-informe'); render(); return; }
     if(t.closest('[data-recibo]')){ abrirRecibo(t.closest('[data-recibo]').getAttribute('data-recibo')); return; }
