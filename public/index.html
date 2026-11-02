@@ -7,7 +7,7 @@
 <title>Tablero de Cobranza</title>
 <style>
   :root{--bg:#f4f5f8;--card:#ffffff;--tx:#14181f;--mut:#667085;--bd:#e4e7ec;--ok:#067647;--warn:#b54708;--bad:#b42318;--acc:#2b59ff;--barbg:#e8ebf1;--chip:#f2f4f7;
-        --c-gris:#616161;--c-azul:#039BE5;--c-verde:#0B8043;--c-rojo:#D50000;--c-amarillo:#F6BF26;--hoy:#2b59ff;--gris:#667085;--gris-bg:rgba(102,112,133,.14);--verde:#067647;--verde-bg:rgba(6,118,71,.14);--rojo:#b42318;--rojo-bg:rgba(180,35,24,.12);--semana:rgba(43,89,255,.06)}
+        --c-gris:#616161;--c-azul:#039BE5;--c-verde:#0B8043;--c-rojo:#D50000;--c-amarillo:#F6BF26;--c-morado:#8E24AA;--c-naranja:#EF6C00;--hoy:#2b59ff;--gris:#667085;--gris-bg:rgba(102,112,133,.14);--verde:#067647;--verde-bg:rgba(6,118,71,.14);--rojo:#b42318;--rojo-bg:rgba(180,35,24,.12);--semana:rgba(43,89,255,.06)}
   @media (prefers-color-scheme:dark){:root{--bg:#0e1117;--card:#171b23;--tx:#eef0f4;--mut:#9aa3b2;--bd:#262c38;--ok:#47cd89;--warn:#fdb022;--bad:#f97066;--acc:#7a98ff;--barbg:#262c38;--chip:#212733;
         --gris:#a4adbd;--gris-bg:rgba(164,173,189,.16);--verde:#47cd89;--verde-bg:rgba(71,205,137,.16);--rojo:#f97066;--rojo-bg:rgba(249,112,102,.16);--semana:rgba(122,152,255,.08)}}
   *{box-sizing:border-box}
@@ -97,6 +97,9 @@
   .it.rojo,.cb.rojo,.pt.rojo{background:var(--c-rojo)}
   .it.amarillo,.pt.amarillo{background:var(--c-amarillo)}
   .it.amarillo{color:#3a2d00}
+  .it.morado,.cb.morado,.pt.morado{background:var(--c-morado)}
+  .it.naranja,.cb.naranja,.pt.naranja{background:var(--c-naranja)}
+  .recup b{color:var(--c-naranja)}
   .resumen.hoy{border:2px solid var(--hoy);box-shadow:0 4px 18px rgba(43,89,255,.18)}
   .hoyhead{background:var(--hoy);color:#fff;margin:-16px -16px 12px;padding:10px 16px;border-radius:11px 11px 0 0;font-size:13px;font-weight:700;letter-spacing:.08em;text-transform:uppercase}
   .hoyhead b{font-size:20px;letter-spacing:0;text-transform:none;margin-left:10px}
@@ -272,7 +275,7 @@
   var INICIO_SEMANA = 6; // 0=domingo ... 6=sábado (tus informes van de sábado a viernes)
 
   var DEMO = location.protocol === 'file:' || /[?&]demo\b/.test(location.search);
-  var state = { datos: null, tab: 'calendario', vista: 'semana', mes: null, dia: null, q: '', cuota: 'todas', colores: {}, mesDeu: null, calDeu: true };
+  var state = { datos: null, tab: 'calendario', vista: 'semana', mes: null, dia: null, q: '', cuota: 'todas', colores: {}, mesDeu: null, mesDes: null, calDeu: true };
   // Los colores los pone una persona con un clic. Hoy se pueden cambiar solo en la demo (se guardan en el navegador).
   var EDITABLE = DEMO;
   var OPCIONES = {
@@ -283,11 +286,16 @@
   function colorDe(it){ return state.colores[claveItem(it)] || (it.tipo === 'aviso' ? 'rojo' : 'gris'); }
   // Una cuota cobrada (según tu Registro o el check de Mel) se pinta sola: verde, o amarillo si faltan pasos por cerrar.
   // El gris, el azul y el rojo siguen siendo a mano, para lo que todavía no se cobró.
+  // Morado: cobro del closer. Naranja: cliente en deudores sin pagar (ninguno de los dos cuenta en el reporte). Verde/amarillo: cobrada.
   function colorMostrado(it){
-    if(it.tipo === 'cuota' && it.c.cobrada) return (state.datos && pasosPendientes(state.datos, it.c)) ? 'amarillo' : 'verde';
+    if(it.tipo === 'cuota'){
+      if(esCloser(it.c)) return 'morado';
+      if(it.c.cobrada) return (state.datos && pasosPendientes(state.datos, it.c)) ? 'amarillo' : 'verde';
+      if(clienteEsDeudor(it.c)) return 'naranja';
+    }
     return colorDe(it);
   }
-  function etiquetaColor(it){ if(colorMostrado(it) === 'amarillo') return 'Pagó, faltan pasos por cerrar'; if(it.tipo === 'cuota' && it.c.cobrada) return 'Pagó'; var c = colorDe(it); var o = OPCIONES[it.tipo].filter(function(x){ return x[0] === c; })[0]; return o ? o[1] : c; }
+  function etiquetaColor(it){ if(it.tipo === 'cuota' && esCloser(it.c)) return 'Cobro del closer (no cuenta en el reporte)'; if(it.tipo === 'cuota' && it.c.cobrada && clienteEsDeudor(it.c)) return 'Pagó (recuperado de deudores, va aparte)'; if(it.tipo === 'cuota' && clienteEsDeudor(it.c) && !it.c.cobrada) return 'Cliente en deudores (no cuenta en el reporte)'; if(colorMostrado(it) === 'amarillo') return 'Pagó, faltan pasos por cerrar'; if(it.tipo === 'cuota' && it.c.cobrada) return 'Pagó'; var c = colorDe(it); var o = OPCIONES[it.tipo].filter(function(x){ return x[0] === c; })[0]; return o ? o[1] : c; }
   var MEDIOS = ['Transferencia en usd','Transferencia en ar','PayPal','STRIPE','Dolar App','Dolar App (pesos)','Efectivo (presencial)','Cheque']; // en el sitio real salen de las listas de tu Registro
   var CONFIRMA = ['Male','Mel','Vicky','Tommy','Mel / Vicky','-'];
   var ultimaCarga = 0, ultimoIntento = 0;
@@ -390,7 +398,7 @@
   }
   function abrirForm(c){
     var d = state.datos;
-    var lista = d.cuotas.filter(function(x){ return x.seguimiento && !x.cobrada && x.vence; }).sort(function(a, b){ return a.vence.localeCompare(b.vence); });
+    var lista = d.cuotas.filter(function(x){ return cuotaVisible(x) && !x.cobrada && x.vence; }).sort(function(a, b){ return a.vence.localeCompare(b.vence); });
     state.form = { c: c || null, lista: lista };
     var h = '<div class="card modal form"><button class="cerrar" data-cerrar-form="1" aria-label="Cerrar">×</button><h3>Registrar pago</h3>';
     if(!c){
@@ -642,15 +650,17 @@
     var q = state.q.trim().toLowerCase();
     return function(x){
       var ok = !q || (x.cliente||'').toLowerCase().indexOf(q) >= 0 || (x.email||'').toLowerCase().indexOf(q) >= 0;
-      return ok && (state.cuota === 'todas' || String(x.n) === state.cuota) && !enDeudores(x);
+      return ok && (state.cuota === 'todas' || String(x.n) === state.cuota);
     };
   }
   function numeros(d, rango, pasa){
-    var l = d.cuotas.filter(function(c){ return c.seguimiento && en(c.vence, rango) && pasa(c); });
+    var l = d.cuotas.filter(function(c){ return c.seguimiento && cuentaEnReporte(c) && en(c.vence, rango) && pasa(c); });
     var cobradas = l.filter(function(c){ return c.cobrada; });
     var debe = suma(l, 'monto'), va = suma(cobradas, 'monto');
-    var entro = suma(d.pagos.filter(function(p){ return en(p.fecha, rango) && pasa(p); }), 'monto');
-    return { debe:debe, va:va, pct: debe ? Math.round(va / debe * 100) : 0, n:l.length, nCob:cobradas.length, entro:entro, sinRegistro: !!d.registroDesde && rango[1] < d.registroDesde };
+    var ds = clavesDeudores(d), enRango = d.pagos.filter(function(p){ return en(p.fecha, rango) && pasa(p) && !pagoEsDeCloser(p); });
+    var recup = enRango.filter(function(p){ return ds[claveCaso(p.cliente, p.email)]; });
+    var entro = suma(enRango.filter(function(p){ return !ds[claveCaso(p.cliente, p.email)]; }), 'monto');
+    return { debe:debe, va:va, pct: debe ? Math.round(va / debe * 100) : 0, n:l.length, nCob:cobradas.length, entro:entro, recuperado:suma(recup, 'monto'), nRecup:recup.length, sinRegistro: !!d.registroDesde && rango[1] < d.registroDesde };
   }
 
   // ---- Piezas visuales ----
@@ -663,12 +673,12 @@
       '<div class="va">Va <b>' + usd.format(n.va) + '</b> · <b>' + n.pct + '%</b></div>' +
       '<div class="barra"><i style="width:' + n.pct + '%"></i></div>' +
       '<div class="mini">' + n.nCob + ' de ' + n.n + ' cuotas cobradas</div>' +
-      (n.sinRegistro ? '<div class="mini">Histórico: lo cobrado sale del check de la planilla de Mel (el Registro empieza en septiembre).</div>' : '<div class="mini">Entró según tu Registro: ' + usd.format(n.entro) + (esHoy ? '' : ' (incluye atrasadas)') + '</div>') + (extra || '') + '</div>';
+      (n.sinRegistro ? '<div class="mini">Histórico: lo cobrado sale del check de la planilla de Mel (el Registro empieza en septiembre).</div>' : '<div class="mini">Entró según tu Registro: ' + usd.format(n.entro) + (esHoy ? '' : ' (incluye atrasadas)') + '</div>') + (n.recuperado ? '<div class="mini recup">Recuperado de deudores (aparte, no suma arriba): <b>' + usd.format(n.recuperado) + '</b> · ' + n.nRecup + ' pago(s)</div>' : '') + (extra || '') + '</div>';
   }
   // Resumen del día de hoy: cuántos pagos se esperan, cuáles, y a quiénes hay que avisar.
   function bloqueHoy(d, pasa){
     var n = numeros(d, [d.hoy, d.hoy], pasa);
-    var cuotas = d.cuotas.filter(function(c){ return c.seguimiento && c.vence === d.hoy && pasa(c); });
+    var cuotas = d.cuotas.filter(function(c){ return cuotaVisible(c) && c.vence === d.hoy && pasa(c); });
     var avisos = (itemsPorFecha(d, pasa)[d.hoy] || []).filter(function(it){ return it.tipo === 'aviso'; });
     var enviados = avisos.filter(function(it){ return colorDe(it) === 'verde'; }).length;
     var extra = '<div class="mini">Recordatorios para enviar hoy: ' + avisos.length + (avisos.length ? ' (' + enviados + ' enviados)' : '') + '</div>';
@@ -691,11 +701,11 @@
     var m = {};
     var add = function(f, it){ (m[f] = m[f] || []).push(it); };
     d.cuotas.forEach(function(c){
-      if(!c.seguimiento || !c.vence || !pasa(c)) return;
+      if(!cuotaVisible(c) || !c.vence || !pasa(c)) return;
       add(c.vence, {tipo:'cuota', c:c});
     });
     d.cuotas.forEach(function(c){
-      if(!c.seguimiento || !c.vence || !pasa(c)) return;
+      if(!c.seguimiento || !c.vence || !pasa(c) || !cuentaEnReporte(c)) return; // sin recordatorios para el closer ni para deudores
       var it = {tipo:'aviso', c:c};
       if(c.cobrada && !state.colores[claveItem(it)]) return; // cobrada y sin recordatorio marcado: no hace falta
       // Aviso 2 días antes. Si vence martes, 1 día antes (lunes), para no avisar en domingo.
@@ -733,7 +743,7 @@
       bloqueResumen('Mes', nombreMes(ym), nMes) + '</div>';
 
     h += '<div class="mesnav"><button data-mes="-1" aria-label="Mes anterior">‹</button><h2>' + esc(nombreMes(ym)) + '</h2><button data-mes="1" aria-label="Mes siguiente">›</button><button data-mes="hoy">Hoy</button></div>';
-    h += '<div class="leyenda"><span><i style="background:var(--c-gris)"></i>Cuota del día</span><span><i style="background:var(--c-azul)"></i>Ya le escribí</span><span><i style="background:var(--c-amarillo)"></i>Pagó, faltan pasos por cerrar</span><span><i style="background:var(--c-verde)"></i>Cobrada y cerrada (se pinta sola), o recordatorio enviado</span><span><i style="background:var(--c-rojo)"></i>Recordatorio (2 días antes)</span><span>⚠ Registro y planilla de Mel no coinciden</span></div>';
+    h += '<div class="leyenda"><span><i style="background:var(--c-gris)"></i>Cuota del día</span><span><i style="background:var(--c-azul)"></i>Ya le escribí</span><span><i style="background:var(--c-amarillo)"></i>Pagó, faltan pasos por cerrar</span><span><i style="background:var(--c-verde)"></i>Cobrada y cerrada (se pinta sola), o recordatorio enviado</span><span><i style="background:var(--c-rojo)"></i>Recordatorio (2 días antes)</span><span><i style="background:var(--c-naranja)"></i>Cliente en deudores (no cuenta en el reporte)</span><span><i style="background:var(--c-morado)"></i>Cobro del closer (no cuenta en el reporte)</span><span>⚠ Registro y planilla de Mel no coinciden</span></div>';
 
     var dias = diasDelGrid(ym);
     h += '<div class="cal">';
@@ -775,12 +785,17 @@
                              : 'Cuota ' + c.n + '/' + c.total + ' · ' + usd.format(c.monto)) +
         '<br><span class="em">Estado: ' + esc(etiquetaColor(it)) + ' · En tu Registro: ' + (c.cobrada ? 'pagada' : 'sin pago') + '</span></div>' +
         '<div>' + celdaEtapa(c) + (c.desfasada ? ' <span class="chip w" title="Tu Registro y la planilla de Mel no coinciden en esta cuota">⚠ revisar</span>' : '') + '</div>';
-      if(EDITABLE && it.tipo === 'cuota' && c.cobrada){
-        h += '<div class="nota" style="padding-left:22px;width:100%">Cobrada: el color se pone solo. Si faltan pasos, queda en amarillo.</div>';
+      var esCl = it.tipo === 'cuota' && esCloser(c), esDe = it.tipo === 'cuota' && !c.cobrada && !esCl && clienteEsDeudor(c);
+      if(EDITABLE && esCl){
+        h += '<div class="colores"><span class="nota" style="margin:0">Cobro del closer: se ve en morado y no cuenta en el reporte.</span><button class="cb morado on" data-closer-no="' + esc(claveCuota(c)) + '">Es mía</button><button class="cb reg" data-registrar="' + esc(claveCuota(c)) + '">Registrar pago</button></div>';
+      } else if(EDITABLE && it.tipo === 'cuota' && c.cobrada){
+        h += '<div class="nota" style="padding-left:22px;width:100%">Cobrada: el color se pone solo. Si faltan pasos, queda en amarillo.' + (clienteEsDeudor(c) ? ' Es de un cliente en deudores: va aparte, en "Recuperado de deudores".' : '') + '</div>';
+      } else if(EDITABLE && esDe){
+        h += '<div class="colores"><span class="nota" style="margin:0">Cliente en deudores: se ve en naranja y no cuenta en el reporte.</span><button class="cb reg" data-registrar="' + esc(claveCuota(c)) + '">Registrar pago</button><button class="cb morado" data-closer="' + esc(claveCuota(c)) + '">Cobro del closer</button></div>';
       } else if(EDITABLE){
         h += '<div class="colores">' + OPCIONES[it.tipo].map(function(o){
           return '<button class="cb ' + o[0] + (col === o[0] ? ' on' : '') + '" data-color="' + o[0] + '" data-key="' + esc(k) + '">' + esc(o[1]) + '</button>';
-        }).join('') + (it.tipo === 'cuota' && !c.cobrada ? '<button class="cb reg" data-registrar="' + esc(claveCuota(c)) + '">Registrar pago</button>' : '') + '</div>';
+        }).join('') + (it.tipo === 'aviso' && !c.cobrada ? '<button class="cb morado" data-closer="' + esc(claveCuota(c)) + '" title="Si este cobro lo hace el closer, se pinta de morado y deja de contar">Cobro del closer</button>' : '') + (it.tipo === 'cuota' && !c.cobrada ? '<button class="cb reg" data-registrar="' + esc(claveCuota(c)) + '">Registrar pago</button><button class="cb morado" data-closer="' + esc(claveCuota(c)) + '">Cobro del closer</button>' : '') + '</div>';
       }
       if(it.tipo === 'cuota'){
         var kk = claveCuota(c), pp = pasosPendientes(d, c);
@@ -914,28 +929,31 @@ function svgRecibo(r, logo, ejemplo) {
   function claveCaso(cliente, email){ return (email && String(email).trim()) ? String(email).trim().toLowerCase() : 'nombre:' + normNombre(cliente); }
   function casoDe(k){ return state.casos[k] || {}; }
   // Un cliente que ya está en Deudores (en Pausado por impago o Incobrable en GHL, o con un caso en la pestaña) se maneja solo ahí:
-  // sus cuotas sin cobrar no se muestran en el Calendario ni en el Desglose. Lo que ya cobró sí se sigue viendo.
-  function esDeudorDeFondo(c){
-    var cobrada = c.cobrada === undefined ? c.pagada : c.cobrada;
-    if(cobrada) return false;
+  // ---- Reglas de color y de conteo ----
+  // Cobro del closer: marca por cuota, guardada en tu planilla de datos con la clave "closer:..." (no hace falta tocar el script de Google).
+  function claveCloser(c){ return 'closer:' + claveCuota(c); }
+  function esCloser(c){ return !!state.colores[claveCloser(c)]; }
+  // Cliente deudor: está en Pausado por impago o Incobrable en GHL, o tiene un caso en la pestaña Deudores.
+  function clienteEsDeudor(c){
     if(c.etapa === 'Pausado por impago' || c.etapa === 'Incobrable') return true;
     return !!state.casos[claveCaso(c.cliente, c.email)];
   }
-  // Del calendario y del Desglose se aparta solo lo que venció ANTES de la semana pasada. Lo reciente (esta semana y la anterior) se
-  // sigue viendo acá para trabajarlo, aunque el cliente ya esté en Deudores.
-  function enDeudores(c){
-    if(!esDeudorDeFondo(c)) return false;
-    var desde = rangos(state.datos.hoy).anterior[0];
-    return !(c.vence && c.vence >= desde);
+  // Las cuotas del closer y las de clientes deudores SE VEN en el calendario (en morado y en naranja) pero NO cuentan en el reporte.
+  function cuentaEnReporte(c){ return !esCloser(c) && !clienteEsDeudor(c); }
+  // Se muestra en el calendario: las cuotas de seguimiento y también las de Incobrables (que el seguimiento deja afuera).
+  function cuotaVisible(c){ return !!c.seguimiento || (c.etapa === 'Incobrable' && (c.n >= 2 || !c.cobrada)); }
+  function esDeudorDeFondo(c){
+    var cobrada = c.cobrada === undefined ? c.pagada : c.cobrada;
+    return !cobrada && !esCloser(c) && clienteEsDeudor(c);
   }
-  function notaDeudores(d){
-    var n = 0, quienes = {};
-    d.cuotas.forEach(function(c){ if(c.seguimiento && enDeudores(c)){ n++; quienes[claveCaso(c.cliente, c.email)] = true; } });
-    if(!n) return '';
-    var k = Object.keys(quienes).length;
-    return '<div class="nota" style="margin:8px 0 0">' + n + ' cuota' + (n === 1 ? '' : 's') + ' sin cobrar de ' + k + ' cliente' + (k === 1 ? '' : 's') + ' de Deudores (vencidas antes de la semana pasada) no se ' + (n === 1 ? 'muestra' : 'muestran') + ' acá. ' +
-      '<button data-tab="deudores" style="background:none;border:0;padding:0;font:inherit;color:var(--c-azul);text-decoration:underline;cursor:pointer">Verlas en Deudores</button></div>';
+  // Lo que cobrás de un deudor no infla el mes: se suma aparte, como "Recuperado de deudores".
+  function clavesDeudores(d){
+    var m = {};
+    d.cuotas.forEach(function(c){ if(clienteEsDeudor(c)) m[claveCaso(c.cliente, c.email)] = true; });
+    Object.keys(state.casos).forEach(function(k){ m[k] = true; });
+    return m;
   }
+  function pagoEsDeCloser(p){ return !!state.colores['closer:' + (p.email || p.cliente) + '|' + p.n]; }
   function etapaDeCaso(k){ return casoDe(k).etapa || ETAPAS_CASO[0]; }
   function esUrgente(k, hoy){ var c = casoDe(k); return !!c.fecha_proxima && String(c.fecha_proxima) < hoy && etapaDeCaso(k) !== 'Cerrado'; }
   // Todo lo automático de un cliente: sale de la planilla de Mel, tu Registro y GHL.
@@ -1276,7 +1294,7 @@ function svgRecibo(r, logo, ejemplo) {
   // ---- Informe semanal (hoja para guardar como PDF) ----
   function datosInforme(d, cual){
     var r = rangos(d.hoy), rg = cual === 'anterior' ? r.anterior : r.semana;
-    var seg = d.cuotas.filter(function(c){ return c.seguimiento; });
+    var seg = d.cuotas.filter(function(c){ return c.seguimiento && cuentaEnReporte(c); }); // lo del closer y de deudores va aparte
     var deb = seg.filter(function(c){ return en(c.vence, rg); });
     var cob = deb.filter(function(c){ return c.cobrada; });
     var noPag = deb.filter(function(c){ return !c.cobrada; });
@@ -1285,15 +1303,20 @@ function svgRecibo(r, logo, ejemplo) {
     var pagaron = cob.map(function(c){ var p = pagoDe(c); return { cliente:c.cliente, cuota:c.n + '/' + c.total, monto:c.monto, fecha: p ? p.fecha : null, medio: p ? p.medio : '', revisar: !!c.desfasada }; })
       .sort(function(a, b){ return (a.fecha || '9999').localeCompare(b.fecha || '9999') || a.cliente.localeCompare(b.cliente); });
     // Cuotas atrasadas (vencían antes de la semana) que se pusieron al día durante la semana.
-    var alDia = d.pagos.filter(function(p){ return en(p.fecha, rg); }).map(function(p){
+    var dsInf = clavesDeudores(d);
+    var pagosSemana = d.pagos.filter(function(p){ return en(p.fecha, rg) && !pagoEsDeCloser(p); });
+    var recuperados = pagosSemana.filter(function(p){ return dsInf[claveCaso(p.cliente, p.email)]; }).map(function(p){ return { cliente:p.cliente, cuota:p.cuota, monto:p.monto, fecha:p.fecha, medio:p.medio }; })
+      .sort(function(a, b){ return (a.fecha || '').localeCompare(b.fecha || ''); });
+    var alDia = pagosSemana.filter(function(p){ return !dsInf[claveCaso(p.cliente, p.email)]; }).map(function(p){
       var c = d.cuotas.filter(function(x){ return (x.email || x.cliente) === (p.email || p.cliente) && x.n === p.n; })[0];
       return c && c.vence && c.vence < rg[0] ? { cliente:p.cliente, cuota:p.cuota, monto:p.monto, fecha:p.fecha, medio:p.medio, vencia:c.vence } : null;
     }).filter(Boolean).sort(function(a, b){ return a.fecha.localeCompare(b.fecha); });
     var viejas = seg.filter(function(c){ return !c.cobrada && c.vence && c.vence < rg[0]; }).sort(function(a, b){ return a.vence.localeCompare(b.vence); });
-    var aparte = function(c){ return c.etapa === 'Pausado por impago' || c.etapa === 'Incobrable'; };
+    var apartes = d.cuotas.filter(function(c){ return cuotaVisible(c) && !c.cobrada && !esCloser(c) && clienteEsDeudor(c) && c.vence && c.vence < rg[0]; }).sort(function(a, b){ return a.vence.localeCompare(b.vence); });
+    var delCloser = d.cuotas.filter(function(c){ return cuotaVisible(c) && !c.cobrada && esCloser(c) && c.vence && en(c.vence, rg); });
     var debe = suma(deb, 'monto'), va = suma(cob, 'monto');
     return { cual:cual, rg:rg, hoy:d.hoy, debe:debe, nDeb:deb.length, va:va, nCob:cob.length, pct: debe ? Math.round(va / debe * 100) : 0, falta: debe - va,
-             pagaron:pagaron, alDia:alDia, noPagaron:noPag, anteriores: viejas.filter(function(c){ return !aparte(c); }), pausados: viejas.filter(aparte) };
+             pagaron:pagaron, alDia:alDia, noPagaron:noPag, anteriores: viejas, pausados: apartes, recuperados: recuperados, delCloser: delCloser };
   }
   function diasAtraso(hoy, vence){ return Math.round((parse(hoy) - parse(vence)) / 86400000); }
   function fechaConAnio(f, hoy){ return !f ? 'sin fecha' : corta(f) + (f.slice(0, 4) !== hoy.slice(0, 4) ? ' ' + f.slice(0, 4) : ''); }
@@ -1317,8 +1340,11 @@ function svgRecibo(r, logo, ejemplo) {
     h += '<h2>Quiénes no pagaron <small>' + inf.noPagaron.length + ' cuota(s) · ' + usd.format(suma(inf.noPagaron, 'monto')) + '</small></h2>' + tn(inf.noPagaron) +
       '<h2>Deudas de semanas anteriores <small>' + inf.anteriores.length + ' cuota(s) · ' + usd.format(suma(inf.anteriores, 'monto')) + '</small></h2>' +
       (inf.anteriores.length ? ta(inf.anteriores) + '<div class="total">Total: ' + usd.format(suma(inf.anteriores, 'monto')) + '</div>' : '<div class="vacio">No hay deudas de semanas anteriores.</div>');
-    if(inf.pausados.length) h += '<h2>Aparte: clientes en Pausado por impago <small>' + inf.pausados.length + ' cuota(s) · ' + usd.format(suma(inf.pausados, 'monto')) + '</small></h2>' + ta(inf.pausados);
-    return h + '<div class="pie2">Generado desde el Tablero de Cobranza. No incluye lo marcado como Incobrable. Importes en dólares.</div></div>';
+    if(inf.pausados.length) h += '<h2>Aparte: clientes en deudores (no cuentan en los totales) <small>' + inf.pausados.length + ' cuota(s) · ' + usd.format(suma(inf.pausados, 'monto')) + '</small></h2>' + ta(inf.pausados);
+    if(inf.delCloser.length) h += '<h2>Aparte: cobros del closer (no cuentan en los totales) <small>' + inf.delCloser.length + ' cuota(s) · ' + usd.format(suma(inf.delCloser, 'monto')) + '</small></h2>' + tabla([{t:'Cliente'},{t:'Cuota'},{t:'Monto',m:1},{t:'Vence'}], inf.delCloser.map(function(c){ return [esc(c.cliente), c.n + '/' + c.total, usd.format(c.monto), fa(c.vence)]; }));
+    h += '<h2>Recuperado de deudores esta semana <small>' + inf.recuperados.length + ' pago(s) · ' + usd.format(suma(inf.recuperados, 'monto')) + '</small></h2>' +
+      (inf.recuperados.length ? tabla([{t:'Cliente'},{t:'Cuota'},{t:'Monto',m:1},{t:'Pagó el'},{t:'Medio'}], inf.recuperados.map(function(p){ return [esc(p.cliente), esc(p.cuota), usd.format(p.monto), fa(p.fecha), esc(p.medio)]; })) + '<div class="total">Total recuperado: ' + usd.format(suma(inf.recuperados, 'monto')) + ' (no está sumado en "Entró")</div>' : '<div class="vacio">Esta semana no se recuperó nada de deudores.</div>');
+    return h + '<div class="pie2">Generado desde el Tablero de Cobranza. Los clientes en deudores y los cobros del closer van aparte y no suman en "Debía entrar" ni en "Entró". Importes en dólares.</div></div>';
   }
   function textoSlack(inf){
     var L = [], fa = function(f){ return fechaConAnio(f, inf.hoy); };
@@ -1337,6 +1363,7 @@ function svgRecibo(r, logo, ejemplo) {
     L.push('*No pagaron (' + inf.noPagaron.length + ')*');
     if(inf.noPagaron.length) inf.noPagaron.forEach(function(c){ L.push('• ' + c.cliente + ' ' + c.n + '/' + c.total + ' · ' + usd.format(c.monto) + ' · vence ' + fa(c.vence)); }); else L.push('• Ninguno');
     L.push('');
+    if(inf.recuperados.length){ L.push('*Recuperado de deudores (aparte, no suma en Entró):* ' + usd.format(suma(inf.recuperados, 'monto')) + ' (' + inf.recuperados.length + ' pagos)'); L.push(''); }
     L.push('*Deudas de semanas anteriores (' + inf.anteriores.length + ' cuotas · ' + usd.format(suma(inf.anteriores, 'monto')) + ')*');
     if(inf.anteriores.length) inf.anteriores.forEach(function(c){ L.push('• ' + c.cliente + ' ' + c.n + '/' + c.total + ' · ' + usd.format(c.monto) + ' · venció ' + fa(c.vence) + ' (' + diasAtraso(inf.hoy, c.vence) + ' días)'); }); else L.push('• Ninguna');
     if(inf.pausados.length){ L.push(''); L.push('*Aparte, en Pausado por impago (' + inf.pausados.length + ' cuotas · ' + usd.format(suma(inf.pausados, 'monto')) + ')*'); inf.pausados.forEach(function(c){ L.push('• ' + c.cliente + ' ' + c.n + '/' + c.total + ' · ' + usd.format(c.monto) + ' · venció ' + fa(c.vence)); }); }
@@ -1384,32 +1411,57 @@ function svgRecibo(r, logo, ejemplo) {
   var COLS_DEUDA = [{t:'Cliente'},{t:'Cuota'},{t:'Monto',m:1},{t:'Vence'},{t:'Etapa en GHL'}];
   function filasDeuda(l){ return l.map(function(x){ return [celdaCliente(x), x.n + '/' + x.total, usd.format(x.monto), esc(corta(x.vence)), celdaEtapa(x)]; }); }
 
+  // Reporte de un mes (el actual o uno anterior): qué falta cobrar, qué va aparte (deudores y closer) y botones para acomodarlo.
+  function detalleMes(d, ym, rg, pasa, nm){
+    var porVence = function(a, b){ return (a.vence || '').localeCompare(b.vence || '') || a.cliente.localeCompare(b.cliente); };
+    var enMes = d.cuotas.filter(function(c){ return cuotaVisible(c) && en(c.vence, rg) && pasa(c); });
+    var faltan = enMes.filter(function(c){ return c.seguimiento && cuentaEnReporte(c) && !c.cobrada; }).sort(porVence);
+    var deudores = enMes.filter(function(c){ return !c.cobrada && !esCloser(c) && clienteEsDeudor(c); }).sort(porVence);
+    var closers = enMes.filter(function(c){ return esCloser(c); }).sort(porVence);
+    var btns = function(c, conCloser){ return !EDITABLE ? '' : '<button class="cb reg" data-registrar="' + esc(claveCuota(c)) + '">Registrar pago</button>' + (conCloser ? ' <button class="cb morado" data-closer="' + esc(claveCuota(c)) + '">Cobro del closer</button>' : ''); };
+    var falta = nm.debe - nm.va;
+    var h = '<section class="repmes"><div class="mesnav"><button data-mes-des="-1" aria-label="Mes anterior">‹</button><h2>Reporte de ' + esc(nombreMes(ym)) + '</h2><button data-mes-des="1" aria-label="Mes siguiente">›</button><button data-mes-des="hoy">Mes actual</button></div>' +
+      '<div class="mini" style="margin:4px 0 10px">Debe entrar <b>' + usd.format(nm.debe) + '</b> · Va <b>' + usd.format(nm.va) + '</b> (' + nm.pct + '%) · Falta <b>' + usd.format(falta) + '</b> (' + (nm.n - nm.nCob) + ' cuota(s))' +
+      (nm.recuperado ? ' · <span class="recup">Recuperado de deudores (aparte): <b>' + usd.format(nm.recuperado) + '</b></span>' : '') + '</div>';
+    h += '<h3 style="margin:8px 0 4px">Lo que falta cobrar <small>' + faltan.length + ' cuota(s) · ' + usd.format(suma(faltan, 'monto')) + '</small></h3>' +
+      (faltan.length ? tabla([{t:'Cliente'},{t:'Cuota'},{t:'Monto',m:1},{t:'Vence'},{t:'Etapa en GHL'},{t:''}], faltan.map(function(c){
+        return [celdaCliente(c), c.n + '/' + c.total, usd.format(c.monto), esc(corta(c.vence)), celdaEtapa(c), btns(c, true)]; })) : '<div class="vacio">No falta nada por cobrar en este mes.</div>');
+    if(deudores.length) h += '<h3 style="margin:14px 0 4px"><span class="pt naranja" style="display:inline-block;vertical-align:middle;margin-right:6px"></span>Aparte: clientes en deudores (no cuentan) <small>' + deudores.length + ' cuota(s) · ' + usd.format(suma(deudores, 'monto')) + '</small></h3>' +
+      tabla([{t:'Cliente'},{t:'Cuota'},{t:'Monto',m:1},{t:'Vence'},{t:'Etapa en GHL'},{t:''}], deudores.map(function(c){ return [celdaCliente(c), c.n + '/' + c.total, usd.format(c.monto), esc(corta(c.vence)), celdaEtapa(c), btns(c, true)]; }));
+    if(closers.length) h += '<h3 style="margin:14px 0 4px"><span class="pt morado" style="display:inline-block;vertical-align:middle;margin-right:6px"></span>Cobros del closer (no cuentan) <small>' + closers.length + ' cuota(s) · ' + usd.format(suma(closers, 'monto')) + '</small></h3>' +
+      tabla([{t:'Cliente'},{t:'Cuota'},{t:'Monto',m:1},{t:'Vence'},{t:''}], closers.map(function(c){ return [celdaCliente(c), c.n + '/' + c.total, usd.format(c.monto), esc(corta(c.vence)), EDITABLE ? '<button class="cb morado on" data-closer-no="' + esc(claveCuota(c)) + '">Es mía</button>' : '']; }));
+    return h + '</section>';
+  }
   function renderDesglose(d, r, pasa){
-    var seg = d.cuotas.filter(function(c){ return c.seguimiento && pasa(c); });
+    var seg = d.cuotas.filter(function(c){ return c.seguimiento && cuentaEnReporte(c) && pasa(c); }); // lo del closer y de deudores va aparte
     var porCobrar = seg.filter(function(c){ return !c.cobrada && en(c.vence, r.semana); });
     var totalSemana = seg.filter(function(c){ return en(c.vence, r.semana); });
     var cobradasSemana = totalSemana.filter(function(c){ return c.cobrada; });
     var vencidas = seg.filter(function(c){ return !c.cobrada && en(c.vence, r.anterior); });
     var viejas = seg.filter(function(c){ return !c.cobrada && c.vence && c.vence < r.anterior[0]; });
-    var enGestion = function(c){ return c.etapa === 'Pausado por impago' || c.etapa === 'Incobrable'; };
-    var antiguas = viejas.filter(function(c){ return !enGestion(c); });
-    var aparte = viejas.filter(enGestion);
-    var rc = state.vista === 'mes' ? r.mes : r.semana;
-    var cobrado = d.pagos.filter(function(p){ return en(p.fecha, rc) && pasa(p); }).sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); });
+    var antiguas = viejas;
+    var aparte = d.cuotas.filter(function(c){ return cuotaVisible(c) && !c.cobrada && !esCloser(c) && clienteEsDeudor(c) && pasa(c); }); // naranja
+    var delCloser = d.cuotas.filter(function(c){ return cuotaVisible(c) && !c.cobrada && esCloser(c) && pasa(c); }); // morado
+    var ymD = state.mesDes || d.hoy.slice(0, 7), rMes = rangoMes(ymD);
+    var rc = state.vista === 'mes' ? rMes : r.semana;
+    var dsDeu = clavesDeudores(d);
+    var cobrado = d.pagos.filter(function(p){ return en(p.fecha, rc) && pasa(p) && !pagoEsDeCloser(p) && !dsDeu[claveCaso(p.cliente, p.email)]; }).sort(function(a,b){ return (b.fecha||'').localeCompare(a.fecha||''); });
     var progreso = totalSemana.length ? Math.round(cobradasSemana.length / totalSemana.length * 100) : 0;
 
-    var nMes = numeros(d, r.mes, pasa), nSem = numeros(d, r.semana, pasa), nAnt = numeros(d, r.anterior, pasa), nRc = numeros(d, rc, pasa);
+    var nMes = numeros(d, rMes, pasa), nSem = numeros(d, r.semana, pasa), nAnt = numeros(d, r.anterior, pasa), nRc = numeros(d, rc, pasa);
     var h = '<div class="tres" style="margin-top:6px">' + bloqueHoy(d, pasa) +
             bloqueResumen('Semana en curso', corta(r.semana[0]) + ' al ' + corta(r.semana[1]), nSem) +
-            bloqueResumen('Mes', nombreMes(d.hoy.slice(0,7)), nMes) + '</div>';
+            bloqueResumen('Mes', nombreMes(ymD), nMes) + '</div>';
+    h += detalleMes(d, ymD, rMes, pasa, nMes);
     h += '<div class="kpis" style="margin-top:12px">';
     h += '<div class="card kpi"><div class="t">Por cobrar esta semana</div><div class="v">' + usd.format(suma(porCobrar,'monto')) + '</div><div class="s">' + porCobrar.length + ' cuota(s) sin cobrar</div>' +
          '<div class="barra"><i style="width:' + progreso + '%"></i></div><div class="s">' + cobradasSemana.length + ' de ' + totalSemana.length + ' cuotas de la semana ya están cobradas · <b>' + nSem.pct + '%</b> en monto</div></div>';
     h += '<div class="card kpi ' + (vencidas.length ? 'bad' : '') + '"><div class="t">Vencidas (semana anterior)</div><div class="v">' + usd.format(suma(vencidas,'monto')) + '</div><div class="s">' + vencidas.length + ' cuota(s) sin cobrar · esa semana se cobró el <b>' + nAnt.pct + '%</b></div>' +
          (antiguas.length ? '<div class="s" style="margin-top:8px">Más antiguas sin cobrar: ' + antiguas.length + ' cuota(s), ' + usd.format(suma(antiguas,'monto')) + '</div>' : '') +
-         (aparte.length ? '<div class="s" style="margin-top:4px">Aparte, en Pausado o Incobrable: ' + aparte.length + ' cuota(s), ' + usd.format(suma(aparte,'monto')) + '</div>' : '') + '</div>';
+         (aparte.length ? '<div class="s" style="margin-top:4px">Aparte, de deudores (naranja, no cuentan): ' + aparte.length + ' cuota(s), ' + usd.format(suma(aparte,'monto')) + '</div>' : '') +
+         (delCloser.length ? '<div class="s" style="margin-top:4px">Del closer (morado, no cuentan): ' + delCloser.length + ' cuota(s), ' + usd.format(suma(delCloser,'monto')) + '</div>' : '') + '</div>';
     h += '<div class="card kpi ok"><div class="t">Cobrado</div><div class="seg"><button class="' + (state.vista==='semana'?'on':'') + '" data-vista="semana">Semana</button><button class="' + (state.vista==='mes'?'on':'') + '" data-vista="mes">Mes</button></div>' +
-         '<div class="v">' + usd.format(suma(cobrado,'monto')) + '</div><div class="s">' + cobrado.length + ' pago(s) · ' + esc(corta(rc[0])) + ' al ' + esc(corta(rc[1])) + '</div><div class="s">Va el <b>' + nRc.pct + '%</b> de lo que debía entrar</div></div>';
+         '<div class="v">' + usd.format(suma(cobrado,'monto')) + '</div><div class="s">' + cobrado.length + ' pago(s) · ' + esc(corta(rc[0])) + ' al ' + esc(corta(rc[1])) + '</div><div class="s">Va el <b>' + nRc.pct + '%</b> de lo que debía entrar</div>' + (nRc.recuperado ? '<div class="s recup">Recuperado de deudores (aparte): <b>' + usd.format(nRc.recuperado) + '</b> · ' + nRc.nRecup + ' pago(s)</div>' : '') + '</div>';
     h += '<a href="#diferencias" style="text-decoration:none;color:inherit"><div class="card kpi ' + (d.diferencias.length ? 'warn' : '') + '"><div class="t">Diferencias para revisar</div><div class="v">' + d.diferencias.length + '</div><div class="s">entre planilla, tu Registro y GHL</div></div></a>';
     h += '</div>';
 
@@ -1451,7 +1503,7 @@ function svgRecibo(r, logo, ejemplo) {
     $('#tabCalendario').className = state.tab === 'calendario' ? 'on' : '';
     $('#tabDesglose').className = state.tab === 'desglose' ? 'on' : '';
     $('#tabDeudores').className = state.tab === 'deudores' ? 'on' : '';
-    $('#contenido').innerHTML = state.tab === 'calendario' ? notaDeudores(d) + renderCalendario(d, r, pasa) : (state.tab === 'deudores' ? renderDeudores(d) : notaDeudores(d) + renderDesglose(d, r, pasa));
+    $('#contenido').innerHTML = state.tab === 'calendario' ? renderCalendario(d, r, pasa) : (state.tab === 'deudores' ? renderDeudores(d) : renderDesglose(d, r, pasa));
     renderModal(d, pasa);
     renderInforme();
     renderRecibo();
@@ -1558,6 +1610,18 @@ function svgRecibo(r, logo, ejemplo) {
     if(t.closest('[data-ir-cierre]')){ state.tab = 'desglose'; state.dia = null; render(); var sec = document.getElementById('cierre'); if(sec && sec.scrollIntoView) sec.scrollIntoView(); return; }
     if((b = t.closest('[data-abrir]'))){ var fa = b.getAttribute('data-abrir'); state.tab = 'calendario'; state.mes = fa.slice(0, 7); state.dia = fa; render(); return; }
     if(t.id === 'modal' || t.closest('[data-cerrar]')){ state.dia = null; state.recien = null; render(); return; }
+    if((b = t.closest('[data-closer]')) || (b = t.closest('[data-closer-no]'))){
+      var marcar = b.hasAttribute('data-closer'), kcl = 'closer:' + (b.getAttribute('data-closer') || b.getAttribute('data-closer-no')), antesCl = state.colores[kcl];
+      if(marcar) state.colores[kcl] = 'gris'; else delete state.colores[kcl];
+      guardarColores(); render();
+      if(!DEMO){
+        api('guardarColor', { clave:kcl, color: marcar ? 'gris' : null }).catch(function(e){
+          if(antesCl) state.colores[kcl] = antesCl; else delete state.colores[kcl];
+          render(); mostrarToast('No se pudo guardar: ' + e.message);
+        });
+      }
+      return;
+    }
     if((b = t.closest('[data-color]'))){
       var kcol = b.getAttribute('data-key'), ncol = b.getAttribute('data-color'), anteriorCol = state.colores[kcol];
       state.colores[kcol] = ncol; guardarColores(); render();
@@ -1571,6 +1635,11 @@ function svgRecibo(r, logo, ejemplo) {
     }
     if((b = t.closest('[data-tab]'))){ state.tab = b.getAttribute('data-tab'); state.dia = null; render(); return; }
     if((b = t.closest('[data-vista]'))){ state.vista = b.getAttribute('data-vista'); render(); return; }
+    if((b = t.closest('[data-mes-des]'))){
+      var vm = b.getAttribute('data-mes-des'), actualM = state.mesDes || state.datos.hoy.slice(0, 7);
+      state.mesDes = vm === 'hoy' ? null : mesMas(actualM, Number(vm));
+      render(); return;
+    }
     if((b = t.closest('[data-mes-deu]'))){
       var vd = b.getAttribute('data-mes-deu'), actualD = state.mesDeu || state.datos.hoy.slice(0, 7);
       state.mesDeu = vd === 'hoy' ? state.datos.hoy.slice(0, 7) : mesMas(actualD, Number(vd));
