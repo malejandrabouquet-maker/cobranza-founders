@@ -277,6 +277,7 @@
   var DEMO = location.protocol === 'file:' || /[?&]demo\b/.test(location.search);
   var state = { datos: null, tab: 'calendario', vista: 'semana', mes: null, dia: null, q: '', cuota: 'todas', colores: {}, mesDeu: null, mesDes: null, calDeu: true };
   try{ state.informeLimpio = localStorage.getItem('cobranza_informe_limpio') === '1'; }catch(e){ state.informeLimpio = false; } // informe sin las secciones "Aparte"
+  try{ state.verPrimeros = localStorage.getItem('cobranza_ver_primeros') !== '0'; }catch(e){ state.verPrimeros = true; } // primeros pagos cobrados por el closer, en morado
   // Los colores los pone una persona con un clic. Hoy se pueden cambiar solo en la demo (se guardan en el navegador).
   var EDITABLE = DEMO;
   var OPCIONES = {
@@ -290,13 +291,13 @@
   // Morado: cobro del closer. Naranja: cliente en deudores sin pagar (ninguno de los dos cuenta en el reporte). Verde/amarillo: cobrada.
   function colorMostrado(it){
     if(it.tipo === 'cuota'){
-      if(esCloser(it.c)) return 'morado';
+      if(esCloser(it.c) || esPrimerPago(it.c)) return 'morado';
       if(it.c.cobrada) return (state.datos && pasosPendientes(state.datos, it.c)) ? 'amarillo' : 'verde';
       if(clienteEsDeudor(it.c)) return 'naranja';
     }
     return colorDe(it);
   }
-  function etiquetaColor(it){ if(it.tipo === 'cuota' && esCloser(it.c)) return 'Cobro del closer (no cuenta en el reporte)'; if(it.tipo === 'cuota' && it.c.cobrada && clienteEsDeudor(it.c)) return 'Pagó (recuperado de deudores, va aparte)'; if(it.tipo === 'cuota' && clienteEsDeudor(it.c) && !it.c.cobrada) return 'Cliente en deudores (no cuenta en el reporte)'; if(colorMostrado(it) === 'amarillo') return 'Pagó, faltan pasos por cerrar'; if(it.tipo === 'cuota' && it.c.cobrada) return 'Pagó'; var c = colorDe(it); var o = OPCIONES[it.tipo].filter(function(x){ return x[0] === c; })[0]; return o ? o[1] : c; }
+  function etiquetaColor(it){ if(it.tipo === 'cuota' && esCloser(it.c)) return 'Cobro del closer (no cuenta en el reporte)'; if(it.tipo === 'cuota' && esPrimerPago(it.c)) return 'Primer pago cobrado por el closer (no cuenta en el reporte)'; if(it.tipo === 'cuota' && it.c.cobrada && clienteEsDeudor(it.c)) return 'Pagó (recuperado de deudores, va aparte)'; if(it.tipo === 'cuota' && clienteEsDeudor(it.c) && !it.c.cobrada) return 'Cliente en deudores (no cuenta en el reporte)'; if(colorMostrado(it) === 'amarillo') return 'Pagó, faltan pasos por cerrar'; if(it.tipo === 'cuota' && it.c.cobrada) return 'Pagó'; var c = colorDe(it); var o = OPCIONES[it.tipo].filter(function(x){ return x[0] === c; })[0]; return o ? o[1] : c; }
   var MEDIOS = ['Transferencia en usd','Transferencia en ar','PayPal','STRIPE','Dolar App','Dolar App (pesos)','Efectivo (presencial)','Cheque']; // en el sitio real salen de las listas de tu Registro
   var CONFIRMA = ['Male','Mel','Vicky','Tommy','Mel / Vicky','-'];
   var ultimaCarga = 0, ultimoIntento = 0;
@@ -689,8 +690,9 @@
       extra += '<div class="mini" style="margin-top:8px">No vence ninguna cuota hoy.</div>';
     } else {
       extra += '<div class="hoylista">';
+      cuotas.sort(function(a, b){ return (esPrimerPago(a) ? 1 : 0) - (esPrimerPago(b) ? 1 : 0); });
       cuotas.slice(0, 6).forEach(function(c){
-        extra += '<div class="hl"><span class="pt ' + colorMostrado({tipo:'cuota', c:c}) + '"></span><span class="hn">' + esc(c.cliente) + '</span><span class="em">' + c.n + '/' + c.total + ' · ' + usd.format(c.monto) + (c.cobrada ? ' · cobrada' : '') + '</span></div>';
+        extra += '<div class="hl"><span class="pt ' + colorMostrado({tipo:'cuota', c:c}) + '"></span><span class="hn">' + esc(c.cliente) + '</span><span class="em">' + c.n + '/' + c.total + ' · ' + usd.format(c.monto) + (esPrimerPago(c) ? ' · primer pago (closer)' : (c.cobrada ? ' · cobrada' : '')) + '</span></div>';
       });
       if(cuotas.length > 6) extra += '<div class="mini">+' + (cuotas.length - 6) + ' más</div>';
       extra += '</div>';
@@ -744,7 +746,7 @@
       bloqueResumen('Mes', nombreMes(ym), nMes) + '</div>';
 
     h += '<div class="mesnav"><button data-mes="-1" aria-label="Mes anterior">‹</button><h2>' + esc(nombreMes(ym)) + '</h2><button data-mes="1" aria-label="Mes siguiente">›</button><button data-mes="hoy">Hoy</button></div>';
-    h += '<div class="leyenda"><span><i style="background:var(--c-gris)"></i>Cuota del día</span><span><i style="background:var(--c-azul)"></i>Ya le escribí</span><span><i style="background:var(--c-amarillo)"></i>Pagó, faltan pasos por cerrar</span><span><i style="background:var(--c-verde)"></i>Cobrada y cerrada (se pinta sola), o recordatorio enviado</span><span><i style="background:var(--c-rojo)"></i>Recordatorio (2 días antes)</span><span><i style="background:var(--c-naranja)"></i>Cliente en deudores (no cuenta en el reporte)</span><span><i style="background:var(--c-morado)"></i>Cobro del closer (no cuenta en el reporte)</span><span>⚠ Registro y planilla de Mel no coinciden</span></div>';
+    h += '<div class="leyenda"><span><i style="background:var(--c-gris)"></i>Cuota del día</span><span><i style="background:var(--c-azul)"></i>Ya le escribí</span><span><i style="background:var(--c-amarillo)"></i>Pagó, faltan pasos por cerrar</span><span><i style="background:var(--c-verde)"></i>Cobrada y cerrada (se pinta sola), o recordatorio enviado</span><span><i style="background:var(--c-rojo)"></i>Recordatorio (2 días antes)</span><span><i style="background:var(--c-naranja)"></i>Cliente en deudores (no cuenta en el reporte)</span><span><i style="background:var(--c-morado)"></i>Cobro del closer o primer pago (no cuenta en el reporte)</span><span>⚠ Registro y planilla de Mel no coinciden</span><button class="ver" data-toggle-primeros="1" style="margin:0 0 0 auto">' + (state.verPrimeros === false ? 'Mostrar' : 'Ocultar') + ' primeros pagos del closer</button></div>';
 
     var dias = diasDelGrid(ym);
     h += '<div class="cal">';
@@ -786,9 +788,12 @@
                              : 'Cuota ' + c.n + '/' + c.total + ' · ' + usd.format(c.monto)) +
         '<br><span class="em">Estado: ' + esc(etiquetaColor(it)) + ' · En tu Registro: ' + (c.cobrada ? 'pagada' : 'sin pago') + '</span></div>' +
         '<div>' + celdaEtapa(c) + (c.desfasada ? ' <span class="chip w" title="Tu Registro y la planilla de Mel no coinciden en esta cuota">⚠ revisar</span>' : '') + '</div>';
+      var esPP = it.tipo === 'cuota' && esPrimerPago(c) && !esCloser(c);
       var esCl = it.tipo === 'cuota' && esCloser(c), esDe = it.tipo === 'cuota' && !c.cobrada && !esCl && clienteEsDeudor(c);
       if(EDITABLE && esCl){
         h += '<div class="colores"><span class="nota" style="margin:0">Cobro del closer: se ve en morado y no cuenta en el reporte.</span><button class="cb morado on" data-closer-no="' + esc(claveCuota(c)) + '">Es mía</button><button class="cb reg" data-registrar="' + esc(claveCuota(c)) + '">Registrar pago</button></div>';
+      } else if(EDITABLE && esPP){
+        h += '<div class="nota" style="padding-left:22px;width:100%">Primer pago: lo cobró el closer al entrar el lead. Se ve en morado y no cuenta en el reporte.</div>';
       } else if(EDITABLE && it.tipo === 'cuota' && c.cobrada){
         h += '<div class="nota" style="padding-left:22px;width:100%">Cobrada: el color se pone solo. Si faltan pasos, queda en amarillo.' + (clienteEsDeudor(c) ? ' Es de un cliente en deudores: va aparte, en "Recuperado de deudores".' : '') + '</div>';
       } else if(EDITABLE && esDe){
@@ -799,7 +804,7 @@
         }).join('') + (it.tipo === 'aviso' && !c.cobrada ? '<button class="cb morado" data-closer="' + esc(claveCuota(c)) + '" title="Si este cobro lo hace el closer, se pinta de morado y deja de contar">Cobro del closer</button>' : '') + (it.tipo === 'cuota' && !c.cobrada ? '<button class="cb reg" data-registrar="' + esc(claveCuota(c)) + '">Registrar pago</button><button class="cb morado" data-closer="' + esc(claveCuota(c)) + '">Cobro del closer</button>' : '') + '</div>';
       }
       if(it.tipo === 'cuota'){
-        var kk = claveCuota(c), pp = pasosPendientes(d, c);
+        var kk = claveCuota(c), pp = esPrimerPago(c) ? null : pasosPendientes(d, c);
         if(state.recien === kk) h += '<div class="recien">✓ Pago registrado</div>';
         if(pp || state.pasos[kk]) h += bloquePasos(d, c, pp);
         if(EDITABLE && c.cobrada && puedeRecibo(d, c)){
@@ -941,8 +946,10 @@ function svgRecibo(r, logo, ejemplo) {
   }
   // Las cuotas del closer y las de clientes deudores SE VEN en el calendario (en morado y en naranja) pero NO cuentan en el reporte.
   function cuentaEnReporte(c){ return !esCloser(c) && !clienteEsDeudor(c); }
+  // Primer pago ya cobrado: lo cobra el closer al entrar el lead. Se ve en morado solo, y nunca cuenta en el reporte.
+  function esPrimerPago(c){ return c.n === 1 && !!c.pagada; }
   // Se muestra en el calendario: las cuotas de seguimiento y también las de Incobrables (que el seguimiento deja afuera).
-  function cuotaVisible(c){ return !!c.seguimiento || (c.etapa === 'Incobrable' && (c.n >= 2 || !c.cobrada)); }
+  function cuotaVisible(c){ return !!c.seguimiento || (c.etapa === 'Incobrable' && (c.n >= 2 || !c.cobrada)) || (esPrimerPago(c) && state.verPrimeros !== false); }
   function esDeudorDeFondo(c){
     var cobrada = c.cobrada === undefined ? c.pagada : c.cobrada;
     return !cobrada && !esCloser(c) && clienteEsDeudor(c);
@@ -1598,6 +1605,7 @@ function svgRecibo(r, logo, ejemplo) {
     if(t.closest('[data-cerrar-recibo]') || t.id === 'recibo'){ state.recibo = null; render(); return; }
     if(t.closest('[data-abrir-deudores]')){ state.informe = 'deudores'; render(); return; }
     if(t.closest('[data-imprimir]')){ if(state.informe === 'deudores'){ imprimirConClase('imprime-informe', 'Deudores-' + state.datos.hoy.slice(0, 4) + '-al-' + state.datos.hoy, null); } else { var inf0 = datosInforme(state.datos, state.informe); imprimirConClase('imprime-informe', 'Informe-de-Cobranza-' + inf0.rg[0] + '-al-' + inf0.rg[1], null); } return; }
+    if(t.closest('[data-toggle-primeros]')){ state.verPrimeros = state.verPrimeros === false; try{ localStorage.setItem('cobranza_ver_primeros', state.verPrimeros ? '1' : '0'); }catch(e){} render(); return; }
     if(t.closest('[data-informe-limpio]')){ state.informeLimpio = !state.informeLimpio; try{ localStorage.setItem('cobranza_informe_limpio', state.informeLimpio ? '1' : '0'); }catch(e){} render(); return; }
     if(t.closest('[data-copiar-slack]')){ var infS = datosInforme(state.datos, state.informe); infS.limpio = !!state.informeLimpio; copiarTexto(textoSlack(infS)); return; }
     if(t.closest('[data-cerrar-informe]') || t.id === 'informe'){ state.informe = null; render(); return; }
