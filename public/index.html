@@ -1151,13 +1151,15 @@ function svgRecibo(r, logo, ejemplo) {
     if(etapa === 'Pausado por impago') return 'Pausado por impago';
     return etapa ? 'Activo en el pipeline' : 'Sin tarjeta en GHL';
   }
+  // Una cuota entra en Deudores cuando lleva MÁS de 5 días vencida (desde el día 6). Antes sigue en el calendario normal.
+  var DIAS_PARA_DEUDOR = 5;
   function calcularDeudores(d, q){
     q = (q || '').trim().toLowerCase();
     var anio = d.hoy.slice(0, 4), desde = anio + '-01-01', ingreso = {}, por = {}, conflictos = 0;
     d.cuotas.forEach(function(c){ if(c.n === 1 && c.vence){ var k = c.email || c.cliente; if(!ingreso[k] || c.vence < ingreso[k]) ingreso[k] = c.vence; } });
     d.cuotas.forEach(function(c){
       var k = c.email || c.cliente;
-      var vencida = !!c.vence && c.vence < d.hoy && c.vence >= desde;
+      var vencida = !!c.vence && c.vence >= desde && diasAtraso(d.hoy, c.vence) > DIAS_PARA_DEUDOR;
       var sinFecha = !c.vence && (!ingreso[k] || ingreso[k] >= desde);
       if(!vencida && !sinFecha) return;
       if(c.cobrada !== c.pagada){ if(c.cobrada !== undefined && c.pagada !== undefined) conflictos++; return; } // el Registro y Mel no coinciden: no se cuenta como deuda, se revisa
@@ -1168,7 +1170,7 @@ function svgRecibo(r, logo, ejemplo) {
       (vencida ? cl.vencidas : cl.sinFecha).push(c);
     });
     var rotulos = function(l){ return l.slice().sort(function(a, b){ return a.n - b.n; }).map(function(c){ return c.n + '/' + c.total; }).join(', '); };
-    var out = { anio:anio, desde:desde, hoy:d.hoy, categorias:{}, sinFecha:[], total:0, nCuotas:0, nClientes:0, conflictos:conflictos };
+    var out = { anio:anio, desde:desde, hoy:d.hoy, categorias:{}, minDias:DIAS_PARA_DEUDOR, sinFecha:[], total:0, nCuotas:0, nClientes:0, conflictos:conflictos };
     CATEGORIAS.forEach(function(c){ out.categorias[c] = []; });
     Object.keys(por).forEach(function(k){
       var cl = por[k];
@@ -1269,7 +1271,7 @@ function svgRecibo(r, logo, ejemplo) {
       '<div class="card kpi"><div class="t">Por situación en GHL</div>' + CATEGORIAS.map(function(c){ var l = dd.categorias[c]; return '<div class="s" style="margin-top:6px"><b>' + esc(c) + ':</b> ' + usd.format(suma(l, 'monto')) + ' · ' + l.length + ' cliente(s)</div>'; }).join('') + '</div>' +
       '<div class="card kpi ' + (dd.sinFecha.length ? 'warn' : '') + '"><div class="t">Sin fecha de vencimiento</div><div class="v">' + usd.format(dd.totalSinFecha) + '</div><div class="s">' + dd.nCuotasSinFecha + ' cuota(s) · ' + dd.sinFecha.length + ' cliente(s)</div></div></div>';
     h += '<div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button class="on" data-abrir-deudores="1">Informe de deudores (PDF)</button>' +
-         '<span class="em">Solo cuotas que vencieron desde el 1 de enero de ' + esc(dd.anio) + '. Antes de septiembre, lo pagado sale del check de la planilla de Mel.</span></div>';
+         '<span class="em">Una cuota entra acá cuando lleva más de 5 días vencida (desde el día 6). Solo cuotas que vencieron desde el 1 de enero de ' + esc(dd.anio) + '. Antes de septiembre, lo pagado sale del check de la planilla de Mel.</span></div>';
     if(dd.conflictos) h += '<div class="nota" style="margin-top:8px">⚠ ' + dd.conflictos + ' cuota(s) tienen datos en conflicto (tu Registro y la planilla de Mel no coinciden) y no se cuentan como deuda. Revisalas en Desglose, sección Diferencias.</div>';
     h += calendarioDeudores(d);
     h += '<div style="margin-top:14px;display:flex;gap:6px;flex-wrap:wrap"><button class="' + (state.vistaDeudores === 'lista' ? 'on' : '') + '" data-vista-deudores="lista">Lista por situación en GHL</button><button class="' + (state.vistaDeudores === 'tablero' ? 'on' : '') + '" data-vista-deudores="tablero">Tablero de casos</button></div>';
@@ -1279,12 +1281,12 @@ function svgRecibo(r, logo, ejemplo) {
       var l = dd.categorias[c]; if(!l.length) return; hay = true;
       h += '<section><h2>' + esc(c) + ' <small>' + l.length + ' cliente(s) · ' + usd.format(suma(l, 'monto')) + '</small></h2>' + tablaDeudores(l, true) + '</section>';
     });
-    if(!hay) h += '<section><div class="vacio">No hay cuotas vencidas e impagas en ' + esc(dd.anio) + (state.q ? ' para esa búsqueda' : '') + '.</div></section>';
+    if(!hay) h += '<section><div class="vacio">No hay cuotas con más de 5 días de atraso en ' + esc(dd.anio) + (state.q ? ' para esa búsqueda' : '') + '.</div></section>';
     if(dd.sinFecha.length) h += '<section><h2>Sin fecha de vencimiento <small>' + dd.sinFecha.length + ' cliente(s) · ' + usd.format(dd.totalSinFecha) + '</small></h2><div class="em">Estas cuotas no tienen fecha cargada en la planilla de Mel, así que no entran en el calendario ni en los totales de arriba. Necesitan una fecha.</div>' + tablaSinFecha(dd.sinFecha) + '</section>';
     return h;
   }
   function htmlDeudores(dd){
-    var h = '<div class="hoja"><h1>Deudores del año ' + esc(dd.anio) + '</h1><div class="sub">Cuotas vencidas e impagas desde el 1 de enero hasta el ' + esc(corta(dd.hoy)) + ' · generado el ' + esc(corta(dd.hoy)) + '</div>' +
+    var h = '<div class="hoja"><h1>Deudores del año ' + esc(dd.anio) + '</h1><div class="sub">Cuotas impagas con más de 5 días de atraso, vencidas desde el 1 de enero hasta el ' + esc(corta(dd.hoy)) + ' · generado el ' + esc(corta(dd.hoy)) + '</div>' +
       '<div class="cifras"><div class="cifra"><span>Total vencido</span><b>' + usd.format(dd.total) + '</b><span>' + dd.nCuotas + ' cuota(s)</span></div>' +
       '<div class="cifra"><span>Clientes deudores</span><b>' + dd.nClientes + '</b><span>con cuotas vencidas</span></div>' +
       '<div class="cifra"><span>Sin fecha de vencimiento</span><b>' + usd.format(dd.totalSinFecha) + '</b><span>' + dd.nCuotasSinFecha + ' cuota(s) · ' + dd.sinFecha.length + ' cliente(s)</span></div></div>';
@@ -1293,9 +1295,9 @@ function svgRecibo(r, logo, ejemplo) {
       var l = dd.categorias[c]; if(!l.length) return; hay = true;
       h += '<h2>' + esc(c) + ' <small>' + l.length + ' cliente(s) · ' + usd.format(suma(l, 'monto')) + '</small></h2>' + tablaDeudores(l) + '<div class="total">Subtotal: ' + usd.format(suma(l, 'monto')) + '</div>';
     });
-    if(!hay) h += '<div class="vacio">No hay cuotas vencidas e impagas en ' + esc(dd.anio) + '.</div>';
+    if(!hay) h += '<div class="vacio">No hay cuotas con más de 5 días de atraso en ' + esc(dd.anio) + '.</div>';
     if(dd.sinFecha.length) h += '<h2>Sin fecha de vencimiento <small>' + dd.sinFecha.length + ' cliente(s) · ' + usd.format(dd.totalSinFecha) + '</small></h2><div class="em" style="margin-bottom:4px">No tienen fecha cargada en la planilla de Mel y no entran en los totales de arriba.</div>' + tablaSinFecha(dd.sinFecha);
-    return h + '<div class="pie2">Fuentes: planilla de Mel (cuotas y fechas), tu Registro de pagos (desde septiembre) y el pipeline Cobranza Founders (etapa). Solo cuotas con vencimiento en ' + esc(dd.anio) + '.' +
+    return h + '<div class="pie2">Fuentes: planilla de Mel (cuotas y fechas), tu Registro de pagos (desde septiembre) y el pipeline Cobranza Founders (etapa). Solo cuotas con vencimiento en ' + esc(dd.anio) + ' y más de 5 días de atraso.' +
       (dd.conflictos ? ' Hay ' + dd.conflictos + ' cuota(s) con datos en conflicto que no se cuentan.' : '') + ' Importes en dólares.</div></div>';
   }
 
